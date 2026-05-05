@@ -1,8 +1,26 @@
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
-from config import *
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+
+AKAHU_USER_TOKEN = os.getenv("AKAHU_USER_TOKEN")
+if not AKAHU_USER_TOKEN:
+    raise ValueError("Missing AKAHU_USER_TOKEN in .env")
+
+GOOGLE_CREDS_FILE = os.getenv("GOOGLE_CREDS_FILE")
+if not GOOGLE_CREDS_FILE:
+    raise ValueError("Missing GOOGLE_CREDS_FILE in .env")
+
+SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME")
+if not SPREADSHEET_NAME:
+    raise ValueError("Missing SPREADSHEET_NAME in .env")
+
+WORKSHEET_NAME = os.getenv("WORKSHEET_NAME")
+if not WORKSHEET_NAME:
+    raise ValueError("Missing WORKSHEET_NAME in .env")
 # ---------------------------
 # 1. Fetch transactions
 # ---------------------------
