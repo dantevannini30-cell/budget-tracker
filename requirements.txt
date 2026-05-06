@@ -3,3 +3,5 @@ gspread
 google-auth
 python-dotenv
 sqlite3
+pandas
+matplotlib
