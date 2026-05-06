@@ -3,6 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
@@ -21,6 +22,12 @@ if not SPREADSHEET_NAME:
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME")
 if not WORKSHEET_NAME:
     raise ValueError("Missing WORKSHEET_NAME in .env")
+
+YOUR_APP_TOKEN = os.getenv("YOUR_APP_TOKEN")
+if not YOUR_APP_TOKEN:
+    raise ValueError("Missing YOUR_APP_TOKEN in .env")
+
+DATE_CUTOFF = os.getenv("DATE_CUTOFF")
 # ---------------------------
 # 1. Fetch transactions
 # ---------------------------
@@ -28,7 +35,8 @@ def fetch_transactions():
     url = "https://api.akahu.io/v1/transactions"
 
     headers = {
-        "Authorization": f"Bearer {AKAHU_USER_TOKEN}"
+        "Authorization": f"Bearer {AKAHU_USER_TOKEN}",
+        "X-Akahu-ID": YOUR_APP_TOKEN
     }
 
     response = requests.get(url, headers=headers)
@@ -38,16 +46,30 @@ def fetch_transactions():
         return []
 
     data = response.json()
+    transactions = data.get("items", [])
 
-    # Akahu returns "items"
-    return data.get("items", [])
+    # Apply date cutoff
+    if DATE_CUTOFF:
+        cutoff_date = datetime.strptime(DATE_CUTOFF, "%Y-%m-%d")
 
+        filtered = []
+        for txn in transactions:
+            txn_date = datetime.fromisoformat(txn["date"].replace("Z", ""))
+            if txn_date > cutoff_date:
+                filtered.append(txn)
+
+        return filtered
+
+    return transactions
 
 # ---------------------------
 # 2. Connect to Google Sheets
 # ---------------------------
 def connect_to_sheet():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
     creds = Credentials.from_service_account_file(
         GOOGLE_CREDS_FILE,
@@ -65,28 +87,45 @@ def connect_to_sheet():
 # 3. Format transaction row
 # ---------------------------
 def format_row(transaction):
-    date = transaction.get("date")
+    raw_date = transaction.get("date")
     description = transaction.get("description")
     amount = transaction.get("amount")
+    txn_id = transaction.get("_id")
+
+    # Convert date → DD/MM/YYYY
+    date_obj = datetime.fromisoformat(raw_date.replace("Z", ""))
+    formatted_date = date_obj.strftime("%d/%m/%Y")
 
     return [
-        date,
+        formatted_date,
         description,
         amount,
-        ""  # category left blank intentionally
+        "",  # category
+        txn_id
     ]
-
-
 # ---------------------------
 # 4. Push to sheet
 # ---------------------------
 def push_transactions(sheet, transactions):
+    # Get all existing IDs (column 5)
+    existing_ids = set(sheet.col_values(5)[1:])  # skip header
+
+    rows = []
+
     for txn in transactions:
+        txn_id = txn.get("_id")
+
+        if txn_id in existing_ids:
+            continue  # skip duplicate
+
         row = format_row(txn)
-        sheet.append_row(row)
-        print("Added:", row)
+        rows.append(row)
 
-
+    if rows:
+        sheet.append_rows(rows)
+        print(f"Added {len(rows)} new rows.")
+    else:
+        print("No new rows to add.")
 # ---------------------------
 # 5. Main flow
 # ---------------------------
