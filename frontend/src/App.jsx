@@ -273,18 +273,21 @@ function TxRow({ txn, i, onEdit }) {
   return (
     <div className="fade-up" style={{
       animationDelay: `${i * 25}ms`,
-      display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12,
+      display: "grid", gridTemplateColumns: "90px 90px 120px 1.4fr 1.4fr", gap: 12,
       padding: "10px 16px", borderBottom: "1px solid var(--border)",
       background: hov ? "var(--surface2)" : "transparent", transition: "background 0.12s", cursor: "default",
     }} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}>
-      <span onClick={() => onEdit(txn, "description")} title="Click to edit description" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", padding: "4px 6px", borderRadius: 3, background: "var(--surface)", border: "1px solid var(--border2)" }}>
-        {txn.description ? txn.description : <span style={{ color: "var(--muted2)" }}>Add description</span>}
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted2)", alignSelf: "center" }}>
+        {txn.date?.slice(0, 10) || "—"}
+      </span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: txn.amount < 0 ? "var(--red)" : "var(--green)", alignSelf: "center" }}>
+        {txn.amount < 0 ? "−" : "+"}${Math.abs(txn.amount).toFixed(2)}
       </span>
       <span onClick={() => onEdit(txn, "category")} title="Click to edit category" style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: txn.category ? "var(--text)" : "var(--muted2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", padding: "4px 6px", borderRadius: 3, background: "var(--surface)", border: "1px solid var(--border2)" }}>
         {txn.category || "Add category"}
       </span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: txn.amount < 0 ? "var(--red)" : "var(--green)", textAlign: "right", alignSelf: "center" }}>
-        {txn.amount < 0 ? "−" : "+"}${Math.abs(txn.amount).toFixed(2)}
+      <span onClick={() => onEdit(txn, "description")} title="Click to edit description" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", padding: "4px 6px", borderRadius: 3, background: "var(--surface)", border: "1px solid var(--border2)" }}>
+        {txn.description ? txn.description : <span style={{ color: "var(--muted2)" }}>Add description</span>}
       </span>
       <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--muted)", alignSelf: "center" }}>
         {txn.statement || "—"}
@@ -374,6 +377,12 @@ function FilterDropdown({ filters, onChange }) {
 }
 
 const DEFAULT_FILTERS = { showIn: true, showOut: true, showCategorised: true, showUncategorised: true };
+const SORT_OPTIONS = [
+  { key: "date_desc",   label: "Date (newest first)" },
+  { key: "date_asc",    label: "Date (oldest first)" },
+  { key: "amount_desc", label: "Amount (highest first)" },
+  { key: "amount_asc",  label: "Amount (lowest first)" },
+];
 
 function applyFilters(transactions, search, filters) {
   const normalized = search.trim().toLowerCase();
@@ -387,14 +396,76 @@ function applyFilters(transactions, search, filters) {
   });
 }
 
+function applySort(transactions, sortKey) {
+  const arr = [...transactions];
+  if (sortKey === "date_desc") return arr.sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (sortKey === "date_asc")  return arr.sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (sortKey === "amount_desc") return arr.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  if (sortKey === "amount_asc")  return arr.sort((a, b) => Math.abs(a.amount) - Math.abs(b.amount));
+  return arr;
+}
+
+function SortDropdown({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const active = value !== "date_desc";
+  const label = SORT_OPTIONS.find(o => o.key === value)?.label ?? "Sort";
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        background: active ? "var(--accent)" : "var(--surface2)",
+        color: active ? "var(--bg)" : "var(--muted2)",
+        border: "1px solid var(--border2)", borderRadius: 2,
+        padding: "7px 14px", fontFamily: "var(--font-mono)", fontSize: 10,
+        cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em",
+        display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
+      }}>
+        Sort
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+          <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 100,
+            background: "var(--surface)", border: "1px solid var(--border2)", borderRadius: 4,
+            minWidth: 210, boxShadow: "0 8px 24px rgba(0,0,0,0.4)", overflow: "hidden",
+          }}>
+            {SORT_OPTIONS.map(opt => (
+              <div key={opt.key} onClick={() => { onChange(opt.key); setOpen(false); }} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", cursor: "pointer", transition: "background 0.1s",
+              }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--surface2)"}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+              >
+                <div style={{
+                  width: 14, height: 14, borderRadius: "50%",
+                  border: `1px solid ${value === opt.key ? "var(--accent)" : "var(--border2)"}`,
+                  background: value === opt.key ? "var(--accent)" : "transparent",
+                  flexShrink: 0, transition: "all 0.1s",
+                }} />
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text)" }}>{opt.label}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Transactions Tab ─────────────────────────────────────────────────────────
 function TransactionsTab() {
   const { data, setData, loading } = useApi("/api/transactions");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [sort, setSort] = useState("date_desc");
   const [editingTxn, setEditingTxn] = useState(null);
 
-  const filtered = applyFilters(data || [], search, filters);
+  const filtered = applySort(applyFilters(data || [], search, filters), sort);
 
   const editTransaction = async (txn, field) => {
     if (field === "category") {
@@ -447,12 +518,13 @@ function TransactionsTab() {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
           style={{ flex: 1, background: "var(--surface2)", border: "1px solid var(--border2)", borderRadius: 2, padding: "7px 12px", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, transition: "border-color 0.15s" }} />
         <FilterDropdown filters={filters} onChange={setFilters} />
+        <SortDropdown value={sort} onChange={setSort} />
       </div>
 
       {/* Header */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
-        {["Description","Category","Amount","Statement"].map(h => (
-          <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: h === "Amount" ? "right" : "left" }}>{h}</span>
+      <div style={{ display: "grid", gridTemplateColumns: "90px 90px 120px 1.4fr 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
+        {["Date","Amount","Category","Description","Statement"].map(h => (
+          <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{h}</span>
         ))}
       </div>
 
@@ -573,6 +645,7 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
   const [txLoading, setTxLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [sort, setSort] = useState("date_desc");
   const [editingTxn, setEditingTxn] = useState(null);
 
   useEffect(() => {
@@ -669,7 +742,7 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
   const weekCatsIncome = calculateCategoryTotals(weekTxns, true);
   const weekCatsExpense = calculateCategoryTotals(weekTxns, false);
 
-  const filteredTransactions = applyFilters(transactions, search, filters);
+  const filteredTransactions = applySort(applyFilters(transactions, search, filters), sort);
 
   const PieChartWrapper = ({ data, title }) => (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 16, flex: 1, minWidth: 280 }}>
@@ -755,11 +828,12 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search transactions..."
             style={{ flex: 1, minWidth: 220, background: "var(--surface2)", border: "1px solid var(--border2)", borderRadius: 2, padding: "7px 12px", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, transition: "border-color 0.15s" }} />
           <FilterDropdown filters={filters} onChange={setFilters} />
+          <SortDropdown value={sort} onChange={setSort} />
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
-          {["Description","Category","Amount","Statement"].map(h => (
-            <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: h === "Amount" ? "right" : "left" }}>{h}</span>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 90px 120px 1.4fr 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
+          {["Date","Amount","Category","Description","Statement"].map(h => (
+            <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{h}</span>
           ))}
         </div>
 
