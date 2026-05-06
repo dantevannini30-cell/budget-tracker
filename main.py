@@ -187,31 +187,24 @@ def push_transactions(sheet, transactions):
 # ---------------------------
 # 5. Main flow
 # ---------------------------
+from utils import clean_transactions
+from database import init_db, ingest_transactions
+
 def main():
+    print("Initialising DB...")
+    init_db()
+
     print("Fetching transactions...")
-    transactions = fetch_transactions()
+    raw_transactions = fetch_transactions()
+    txn = raw_transactions[0]
+    print(txn.keys())
+    print("Cleaning transactions...")
+    cleaned = clean_transactions(raw_transactions)
 
-    if not transactions:
-        print("No transactions found.")
-        return
-
-    print(f"Fetched {len(transactions)} transactions.")
-
-
-
-    print("Filtering internal transfers...")
-    filtered_transactions = simple_filter(transactions)
-
-    print(f"{len(filtered_transactions)} transactions after filtering.")
-
-    print("Connecting to Google Sheets...")
-    sheet = connect_to_sheet()
-
-    print("Pushing to sheet...")
-    push_transactions(sheet, filtered_transactions)
+    print("Ingesting into database...")
+    ingest_transactions(cleaned)
 
     print("Done.")
-
 
 if __name__ == "__main__":
     main()
