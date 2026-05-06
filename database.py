@@ -38,7 +38,7 @@ def ingest_transactions(transactions):
             txn["date"],
             txn["amount"],
             txn["description"],
-            "",  # category (empty for now)
+            txn["category"],
             txn["_account"]
         ))
 

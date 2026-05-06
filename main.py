@@ -196,8 +196,7 @@ def main():
 
     print("Fetching transactions...")
     raw_transactions = fetch_transactions()
-    txn = raw_transactions[0]
-    print(txn.keys())
+
     print("Cleaning transactions...")
     cleaned = clean_transactions(raw_transactions)
 
