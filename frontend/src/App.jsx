@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from "recharts";
 
 const API = "http://localhost:8000";
 
@@ -414,21 +415,44 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
       if (!res.ok) throw new Error("Failed to update transaction");
 
       setTransactions(prev => prev.map(item => item.id === txn.id ? { ...item, ...payload } : item));
-      setSummary(prev => prev); // keep summary unchanged for now
+      setSummary(prev => prev);
     } catch (err) {
       alert(err.message);
     }
   };
 
+  const calculateCategoryTotals = (txns, isIncome = true) => {
+    const filtered = txns.filter(t => (isIncome && t.amount > 0) || (!isIncome && t.amount < 0));
+    const totals = {};
+    filtered.forEach(t => {
+      const cat = t.category || "Uncategorized";
+      totals[cat] = (totals[cat] || 0) + Math.abs(t.amount);
+    });
+    return Object.entries(totals).map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) })).sort((a, b) => b.value - a.value);
+  };
+
+  const getLastWeekTransactions = () => {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return transactions.filter(t => new Date(t.date) >= sevenDaysAgo);
+  };
+
+  const COLORS = ["#00d4aa", "#ff4d6d", "#ffa502", "#6366f1", "#8b5cf6", "#d946ef", "#0891b2", "#06b6d4"];
+
   if (loading) return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}><Skel h={20} /><Skel h={20} /><Skel h={20} /></div>;
   if (error) return <p style={{ color: "var(--red)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{error}</p>;
   if (!summary) return null;
 
-  const { start_date, created_at, transaction_count, summary: stats, balances } = summary;
+  const { start_date, created_at, transaction_count, summary: stats } = summary;
   const all = stats.all;
   const lastWeek = stats.last_week;
-
   const totalBalance = all.total_balance;
+
+  const allCatsIncome = calculateCategoryTotals(transactions, true);
+  const allCatsExpense = calculateCategoryTotals(transactions, false);
+  const weekTxns = getLastWeekTransactions();
+  const weekCatsIncome = calculateCategoryTotals(weekTxns, true);
+  const weekCatsExpense = calculateCategoryTotals(weekTxns, false);
 
   const normalized = search.trim().toLowerCase();
   const filteredTransactions = transactions.filter(t => {
@@ -436,6 +460,32 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
     const matchFilter = filter === "all" || (filter === "in" && t.amount > 0) || (filter === "out" && t.amount < 0);
     return matchSearch && matchFilter;
   });
+
+  const PieChartWrapper = ({ data, title }) => (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 16, flex: 1, minWidth: 280 }}>
+      <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--muted2)", marginBottom: 12 }}>{title}</div>
+      {data.length === 0 ? (
+        <div style={{ textAlign: "center", color: "var(--muted2)", padding: "40px 20px", fontSize: 12 }}>No transactions</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={180}>
+          <PieChart>
+            <Pie data={data} cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={2} dataKey="value">
+              {data.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+            </Pie>
+            <Tooltip formatter={(value) => `$${value.toFixed(2)}`} contentStyle={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 2, color: "var(--text)" }} />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
+      <div style={{ marginTop: 12, fontSize: 10 }}>
+        {data.map((item, i) => (
+          <div key={item.name} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", color: "var(--muted2)" }}>
+            <span style={{ color: COLORS[i % COLORS.length] }}>● {item.name}</span>
+            <span>${item.value.toFixed(2)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -455,16 +505,30 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         <StatCard label="Total Balance" value={`$${totalBalance.toFixed(2)}`} sub="Current balance" accent delay={0} />
-        <StatCard label="Total In" value={`$${all.total_in.toFixed(2)}`} sub="Since budget start" delay={80} />
-        <StatCard label="Total Out" value={`$${all.total_out.toFixed(2)}`} sub="Since budget start" delay={160} />
-        <StatCard label="Net" value={`${all.net >= 0 ? "+" : ""}$${all.net.toFixed(2)}`} sub="Since budget start" accent={all.net >= 0} delay={240} />
       </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <StatCard label="Total In" value={`$${all.total_in.toFixed(2)}`} sub="Since budget start" delay={0} />
+        <StatCard label="Total Out" value={`$${all.total_out.toFixed(2)}`} sub="Since budget start" delay={80} />
+        <StatCard label="Net" value={`${all.net >= 0 ? "+" : ""}$${all.net.toFixed(2)}`} sub="Since budget start" accent={all.net >= 0} delay={160} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+        <PieChartWrapper data={allCatsIncome} title="Income by Category" />
+        <PieChartWrapper data={allCatsExpense} title="Expenses by Category" />
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
         <StatCard label="Last 7d In" value={`$${lastWeek.total_in.toFixed(2)}`} sub="Last week" delay={0} />
         <StatCard label="Last 7d Out" value={`$${lastWeek.total_out.toFixed(2)}`} sub="Last week" delay={80} />
         <StatCard label="Last 7d Net" value={`${lastWeek.net >= 0 ? "+" : ""}$${lastWeek.net.toFixed(2)}`} sub="Last week" accent={lastWeek.net >= 0} delay={160} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+        <PieChartWrapper data={weekCatsIncome} title="Last 7d Income by Category" />
+        <PieChartWrapper data={weekCatsExpense} title="Last 7d Expenses by Category" />
       </div>
 
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
