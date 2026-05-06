@@ -227,8 +227,7 @@ def update_transaction_category(transaction_id: str, update: CategoryUpdate):
     conn = get_connection()
     cursor = conn.cursor()
 
-    if update.description is not None:
-        updates = []
+    updates = []
     params = []
     if update.category is not None:
         updates.append("category = ?")
