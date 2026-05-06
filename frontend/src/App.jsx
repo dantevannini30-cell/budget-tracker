@@ -70,7 +70,7 @@ function useApi(endpoint) {
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [endpoint]);
-  return { data, loading };
+  return { data, setData, loading };
 }
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
@@ -193,15 +193,40 @@ function RecentActivity() {
 
 // ─── Transactions Tab ─────────────────────────────────────────────────────────
 function TransactionsTab() {
-  const { data, loading } = useApi("/api/transactions");
+  const { data, setData, loading } = useApi("/api/transactions");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
 
   const filtered = (data || []).filter(t => {
-    const matchSearch = t.description?.toLowerCase().includes(search.toLowerCase());
+    const normalized = search.trim().toLowerCase();
+    const matchSearch = !normalized || [t.description, t.statement].some(value => value?.toLowerCase().includes(normalized));
     const matchFilter = filter === "all" || (filter === "in" && t.amount > 0) || (filter === "out" && t.amount < 0);
     return matchSearch && matchFilter;
   });
+
+  const editTransaction = async (txn, field) => {
+    const current = field === "description" ? txn.description || "" : txn.category || "";
+    const promptText = field === "description" ? "Edit description:" : "Edit category:";
+    const value = prompt(promptText, current);
+    if (value === null) return;
+
+    const payload = {};
+    if (field === "description") payload.description = value;
+    if (field === "category") payload.category = value;
+
+    try {
+      const res = await fetch(`${API}/api/transactions/${txn.id}/category`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to update transaction");
+
+      setData(prev => prev.map(item => item.id === txn.id ? { ...item, ...payload } : item));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2 }}>
@@ -221,8 +246,8 @@ function TransactionsTab() {
       </div>
 
       {/* Header */}
-      <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 100px 90px", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
-        {["Date","Description","Amount","Category"].map(h => (
+      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
+        {["Description","Category","Amount","Statement"].map(h => (
           <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: h === "Amount" ? "right" : "left" }}>{h}</span>
         ))}
       </div>
@@ -232,7 +257,7 @@ function TransactionsTab() {
         ? Array.from({length:10}).map((_,i) => <div key={i} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}><Skel w={`${50+Math.random()*40}%`} /></div>)
         : filtered.length === 0
           ? <p style={{ color: "var(--muted2)", padding: "24px 16px", fontFamily: "var(--font-mono)", fontSize: 12 }}>No transactions found</p>
-          : filtered.map((txn, i) => <TxRow key={txn.id} txn={txn} i={i} />)
+          : filtered.map((txn, i) => <TxRow key={txn.id} txn={txn} i={i} onEdit={editTransaction} />)
       }
       {!loading && filtered.length > 0 && (
         <div style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 10, fontFamily: "var(--font-mono)", borderTop: "1px solid var(--border)" }}>
@@ -339,6 +364,10 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [transactions, setTransactions] = useState([]);
+  const [txLoading, setTxLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
 
   useEffect(() => {
     if (!budgetId) return;
@@ -357,6 +386,40 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
       .catch(err => { setError(err.message); setLoading(false); });
   }, [budgetId]);
 
+  useEffect(() => {
+    if (!budgetId) return;
+    setTxLoading(true);
+    fetch(`${API}/api/budgets/${budgetId}/transactions`)
+      .then(r => r.json())
+      .then(data => { setTransactions(data); setTxLoading(false); })
+      .catch(() => setTxLoading(false));
+  }, [budgetId]);
+
+  const editTransaction = async (txn, field) => {
+    const current = field === "description" ? txn.description || "" : txn.category || "";
+    const promptText = field === "description" ? "Edit description:" : "Edit category:";
+    const value = prompt(promptText, current);
+    if (value === null) return;
+
+    const payload = {};
+    if (field === "description") payload.description = value;
+    if (field === "category") payload.category = value;
+
+    try {
+      const res = await fetch(`${API}/api/transactions/${txn.id}/category`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to update transaction");
+
+      setTransactions(prev => prev.map(item => item.id === txn.id ? { ...item, ...payload } : item));
+      setSummary(prev => prev); // keep summary unchanged for now
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
   if (loading) return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}><Skel h={20} /><Skel h={20} /><Skel h={20} /></div>;
   if (error) return <p style={{ color: "var(--red)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{error}</p>;
   if (!summary) return null;
@@ -366,6 +429,13 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
   const lastWeek = stats.last_week;
 
   const totalBalance = all.total_balance;
+
+  const normalized = search.trim().toLowerCase();
+  const filteredTransactions = transactions.filter(t => {
+    const matchSearch = !normalized || [t.description, t.statement].some(value => value?.toLowerCase().includes(normalized));
+    const matchFilter = filter === "all" || (filter === "in" && t.amount > 0) || (filter === "out" && t.amount < 0);
+    return matchSearch && matchFilter;
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -396,26 +466,65 @@ function BudgetDashboard({ budgetId, onClearBudget }) {
         <StatCard label="Last 7d Out" value={`$${lastWeek.total_out.toFixed(2)}`} sub="Last week" delay={80} />
         <StatCard label="Last 7d Net" value={`${lastWeek.net >= 0 ? "+" : ""}$${lastWeek.net.toFixed(2)}`} sub="Last week" accent={lastWeek.net >= 0} delay={160} />
       </div>
+
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)", marginBottom: 20 }}>Budget Transactions</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search transactions..."
+            style={{ flex: 1, minWidth: 220, background: "var(--surface2)", border: "1px solid var(--border2)", borderRadius: 2, padding: "7px 12px", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, transition: "border-color 0.15s" }} />
+          { ["all","in","out"].map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              background: filter === f ? "var(--accent)" : "var(--surface2)",
+              color: filter === f ? "var(--bg)" : "var(--muted2)",
+              border: "1px solid var(--border2)", borderRadius: 2,
+              padding: "7px 14px", fontFamily: "var(--font-mono)", fontSize: 10,
+              cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.1em", transition: "all 0.15s",
+            }}>{f}</button>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12, padding: "14px 16px 8px", borderBottom: "1px solid var(--border2)", marginTop: 14 }}>
+          {["Description","Category","Amount","Statement"].map(h => (
+            <span key={h} style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", textAlign: h === "Amount" ? "right" : "left" }}>{h}</span>
+          ))}
+        </div>
+
+        {txLoading ? (
+          Array.from({length:10}).map((_,i) => <div key={i} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}><Skel w={`${50+Math.random()*40}%`} /></div>)
+        ) : filteredTransactions.length === 0 ? (
+          <p style={{ color: "var(--muted2)", padding: "24px 16px", fontFamily: "var(--font-mono)", fontSize: 12 }}>No transactions found</p>
+        ) : filteredTransactions.map((txn, i) => <TxRow key={txn.id} txn={txn} i={i} onEdit={editTransaction} />)}
+
+        {!txLoading && filteredTransactions.length > 0 && (
+          <div style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 10, fontFamily: "var(--font-mono)", borderTop: "1px solid var(--border)" }}>
+            {filteredTransactions.length} transactions
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function TxRow({ txn, i }) {
+function TxRow({ txn, i, onEdit }) {
   const [hov, setHov] = useState(false);
   return (
     <div className="fade-up" style={{
       animationDelay: `${i * 25}ms`,
-      display: "grid", gridTemplateColumns: "90px 1fr 100px 90px", gap: 12,
+      display: "grid", gridTemplateColumns: "1.6fr 120px 100px 1.4fr", gap: 12,
       padding: "10px 16px", borderBottom: "1px solid var(--border)",
       background: hov ? "var(--surface2)" : "transparent", transition: "background 0.12s", cursor: "default",
     }} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", paddingTop: 1 }}>{txn.date?.slice(0,10)}</span>
-      <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{txn.description}</span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: txn.amount < 0 ? "var(--red)" : "var(--green)", textAlign: "right" }}>
+      <span onClick={() => onEdit(txn, "description")} title="Click to edit description" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", padding: "4px 6px", borderRadius: 3, background: "var(--surface)", border: "1px solid var(--border2)" }}>
+        {txn.description ? txn.description : <span style={{ color: "var(--muted2)" }}>Add description</span>}
+      </span>
+      <span onClick={() => onEdit(txn, "category")} title="Click to edit category" style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: txn.category ? "var(--text)" : "var(--muted2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", padding: "4px 6px", borderRadius: 3, background: "var(--surface)", border: "1px solid var(--border2)" }}>
+        {txn.category || "Add category"}
+      </span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: txn.amount < 0 ? "var(--red)" : "var(--green)", textAlign: "right", alignSelf: "center" }}>
         {txn.amount < 0 ? "−" : "+"}${Math.abs(txn.amount).toFixed(2)}
       </span>
-      <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--muted)", textAlign: "right", background: "var(--border)", borderRadius: 2, padding: "2px 6px", alignSelf: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {txn.category || "—"}
+      <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--muted)", alignSelf: "center" }}>
+        {txn.statement || "—"}
       </span>
     </div>
   );
@@ -438,7 +547,7 @@ export default function App() {
       <header style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 24, letterSpacing: "0.1em", color: "var(--accent)" }}>BUDGET</div>
         <nav style={{ display: "flex" }}>
-          {["dashboard","transactions","budgets"].map(t => (
+          {["dashboard","budgets"].map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: "none", border: "none", cursor: "pointer", padding: "0 16px", height: 52,
               fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em",
@@ -476,7 +585,6 @@ export default function App() {
             )}
           </div>
         )}
-        {tab === "transactions" && <TransactionsTab />}
         {tab === "budgets" && <BudgetsTab onSelectBudget={handleSelectBudget} />}
       </main>
     </div>

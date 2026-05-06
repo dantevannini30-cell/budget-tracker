@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
-from database import init_db, create_budget
+from database import init_db, create_budget, ingest_transactions
 import json
 
 init_db()
@@ -45,9 +45,9 @@ def get_transactions():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, date, amount, description, category, account_id
+        SELECT id, date, amount, description, category, statement, account_id
         FROM transactions
-        WHERE LOWER(description) NOT LIKE '%transfer%'
+        WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
         ORDER BY date DESC
         LIMIT 50
     """)
@@ -60,6 +60,11 @@ def get_transactions():
 
 class BudgetCreate(BaseModel):
     start_date: str
+
+
+class CategoryUpdate(BaseModel):
+    category: str | None = None
+    description: str | None = None
 
 
 @app.get("/api/budgets")
@@ -88,13 +93,25 @@ def create_budget_endpoint(budget: BudgetCreate):
     except ValueError:
         raise HTTPException(status_code=400, detail="start_date must be YYYY-MM-DD")
 
+    # Fetch, clean, and ingest transactions from Akahu before creating budget
+    try:
+        from main import fetch_transactions
+        from utils import clean_transactions
+        
+        raw_transactions = fetch_transactions()
+        cleaned = clean_transactions(raw_transactions)
+        ingest_transactions(cleaned)
+    except Exception as e:
+        print(f"Warning: Could not fetch/ingest transactions: {e}")
+        # Continue anyway - use existing data in DB
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id
         FROM transactions
         WHERE date >= ?
-          AND LOWER(description) NOT LIKE '%transfer%'
+          AND LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
         ORDER BY date DESC
     """, (budget.start_date,))
 
@@ -128,7 +145,7 @@ def budget_summary(budget_id: str):
         FROM transactions t
         JOIN budget_transactions bt ON bt.transaction_id = t.id
         WHERE bt.budget_id = ?
-          AND LOWER(t.description) NOT LIKE '%transfer%'
+          AND LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
     """, (budget_id,))
 
     rows = [dict(row) for row in cursor.fetchall()]
@@ -164,6 +181,79 @@ def budget_summary(budget_id: str):
     }
 
 
+@app.get("/api/budgets/{budget_id}/uncategorized-transactions")
+def get_uncategorized_transactions(budget_id: str):
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT t.id, t.date, t.amount, t.description, t.category, t.statement, t.account_id
+        FROM transactions t
+        JOIN budget_transactions bt ON bt.transaction_id = t.id
+        WHERE bt.budget_id = ?
+          AND (t.category IS NULL OR t.category = '')
+          AND LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
+        ORDER BY t.date DESC
+    """, (budget_id,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+@app.get("/api/budgets/{budget_id}/transactions")
+def get_budget_transactions(budget_id: str):
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT t.id, t.date, t.amount, t.description, t.category, t.statement, t.account_id
+        FROM transactions t
+        JOIN budget_transactions bt ON bt.transaction_id = t.id
+        WHERE bt.budget_id = ?
+          AND LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
+        ORDER BY t.date DESC
+    """, (budget_id,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+@app.put("/api/transactions/{transaction_id}/category")
+def update_transaction_category(transaction_id: str, update: CategoryUpdate):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if update.description is not None:
+        updates = []
+    params = []
+    if update.category is not None:
+        updates.append("category = ?")
+        params.append(update.category)
+    if update.description is not None:
+        updates.append("description = ?")
+        params.append(update.description)
+
+    if not updates:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No category or description provided")
+
+    query = f"UPDATE transactions SET {', '.join(updates)} WHERE id = ?"
+    params.append(transaction_id)
+    cursor.execute(query, params)
+
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    conn.commit()
+    conn.close()
+    return {"message": "Transaction updated"}
+
+
 # ---------------------------
 # TEST ENDPOINT 3
 # Returns spending totals by category — ready to feed a pie chart
@@ -180,7 +270,7 @@ def spending_by_category():
             ROUND(SUM(ABS(amount)), 2) as total
         FROM transactions
         WHERE amount < 0
-          AND LOWER(description) NOT LIKE '%transfer%'
+          AND LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
         GROUP BY category
         ORDER BY total DESC
     """)

@@ -18,6 +18,7 @@ def init_db():
         amount REAL,
         description TEXT,
         category TEXT,
+        statement TEXT,
         account_id TEXT,
         balance REAL
     )
@@ -44,6 +45,12 @@ def init_db():
     # Add balance column to transactions if it doesn't exist
     try:
         cursor.execute("ALTER TABLE transactions ADD COLUMN balance REAL")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add statement column to transactions if it doesn't exist
+    try:
+        cursor.execute("ALTER TABLE transactions ADD COLUMN statement TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
 
@@ -136,14 +143,15 @@ def ingest_transactions(transactions):
     for txn in transactions:
         cursor.execute("""
         INSERT OR IGNORE INTO transactions
-        (id, date, amount, description, category, account_id, balance)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, date, amount, description, category, statement, account_id, balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             txn["_id"],
             txn["date"],
             txn["amount"],
             txn["description"],
             txn["category"],
+            txn.get("statement"),
             txn["_account"],
             txn.get("balance")
         ))
