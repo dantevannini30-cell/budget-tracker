@@ -19,7 +19,8 @@ def clean_transactions(transactions):
             "amount": txn["amount"],
             "description": txn.get("description", ""),
             "category": categorise_transaction(txn),
-            "_account": txn["_account"]
+            "_account": txn["_account"],
+            "balance": txn.get("balance")
         })
 
     return cleaned

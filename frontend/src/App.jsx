@@ -243,6 +243,163 @@ function TransactionsTab() {
   );
 }
 
+function BudgetsTab({ onSelectBudget }) {
+  const [budgets, setBudgets] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetch(`${API}/api/budgets`)
+      .then(r => r.json())
+      .then(data => { if (!active) return; setBudgets(data); setLoading(false); })
+      .catch(() => { if (!active) return; setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  const createBudget = async () => {
+    const date = prompt("Enter budget start date (YYYY-MM-DD):");
+    if (!date) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      alert("Please use YYYY-MM-DD format");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    try {
+      const res = await fetch(`${API}/api/budgets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: date }),
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || "Failed to create budget");
+      }
+      const budget = await res.json();
+      setBudgets(prev => prev ? [budget, ...prev] : [budget]);
+      setMessage(`Created budget ${budget.id.slice(0, 8)} with ${budget.transaction_count} transactions.`);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)" }}>Budgets</div>
+          <div style={{ marginTop: 4, fontSize: 24, fontFamily: "var(--font-display)" }}>Saved budget periods</div>
+        </div>
+        <button onClick={createBudget} disabled={saving} style={{
+          background: "var(--accent)", color: "var(--bg)", border: "none",
+          borderRadius: 2, padding: "10px 18px", cursor: "pointer",
+          fontFamily: "var(--font-mono)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em"
+        }}>
+          {saving ? "Saving..." : "New budget"}
+        </button>
+      </div>
+
+      {message && <div style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{message}</div>}
+
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {[1,2,3].map(i => <Skel key={i} h={18} />)}
+        </div>
+      ) : !budgets?.length ? (
+        <p style={{ color: "var(--muted2)", fontFamily: "var(--font-mono)", fontSize: 12 }}>No budgets yet. Create one to store transactions from a start date.</p>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 140px 120px", gap: 12, padding: "12px 0", borderBottom: "1px solid var(--border)", color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase" }}>
+            <span>Budget ID</span>
+            <span>Start date</span>
+            <span>Created</span>
+            <span style={{ textAlign: "right" }}>Transactions</span>
+          </div>
+          {budgets.map((budget, index) => (
+            <div key={budget.id} onClick={() => onSelectBudget(budget.id)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "1fr 120px 140px 120px", gap: 12, padding: "12px 0", borderBottom: index + 1 === budgets.length ? "none" : "1px solid var(--border)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{budget.id}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{budget.start_date}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{budget.created_at.slice(0, 10)}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{budget.transaction_count}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function BudgetDashboard({ budgetId, onClearBudget }) {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!budgetId) return;
+    setLoading(true);
+    setError("");
+
+    fetch(`${API}/api/budgets/${budgetId}/summary`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Failed to load budget summary");
+        }
+        return res.json();
+      })
+      .then(data => { setSummary(data); setLoading(false); })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, [budgetId]);
+
+  if (loading) return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}><Skel h={20} /><Skel h={20} /><Skel h={20} /></div>;
+  if (error) return <p style={{ color: "var(--red)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{error}</p>;
+  if (!summary) return null;
+
+  const { start_date, created_at, transaction_count, summary: stats, balances } = summary;
+  const all = stats.all;
+  const lastWeek = stats.last_week;
+
+  const totalBalance = all.total_balance;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)" }}>Budget Analytics</div>
+            <div style={{ marginTop: 4, fontSize: 24, fontFamily: "var(--font-display)" }}>Since {start_date}</div>
+            <div style={{ fontFamily: "var(--font-mono)", color: "var(--muted2)", fontSize: 11, marginTop: 6 }}>Created {created_at.slice(0, 10)} · {transaction_count} transactions</div>
+          </div>
+          <button onClick={onClearBudget} style={{
+            background: "var(--surface2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 2,
+            padding: "10px 18px", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em"
+          }}>
+            View overall dashboard
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <StatCard label="Total Balance" value={`$${totalBalance.toFixed(2)}`} sub="Current balance" accent delay={0} />
+        <StatCard label="Total In" value={`$${all.total_in.toFixed(2)}`} sub="Since budget start" delay={80} />
+        <StatCard label="Total Out" value={`$${all.total_out.toFixed(2)}`} sub="Since budget start" delay={160} />
+        <StatCard label="Net" value={`${all.net >= 0 ? "+" : ""}$${all.net.toFixed(2)}`} sub="Since budget start" accent={all.net >= 0} delay={240} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <StatCard label="Last 7d In" value={`$${lastWeek.total_in.toFixed(2)}`} sub="Last week" delay={0} />
+        <StatCard label="Last 7d Out" value={`$${lastWeek.total_out.toFixed(2)}`} sub="Last week" delay={80} />
+        <StatCard label="Last 7d Net" value={`${lastWeek.net >= 0 ? "+" : ""}$${lastWeek.net.toFixed(2)}`} sub="Last week" accent={lastWeek.net >= 0} delay={160} />
+      </div>
+    </div>
+  );
+}
+
 function TxRow({ txn, i }) {
   const [hov, setHov] = useState(false);
   return (
@@ -267,13 +424,21 @@ function TxRow({ txn, i }) {
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("dashboard");
+  const [selectedBudgetId, setSelectedBudgetId] = useState(null);
+
+  const handleSelectBudget = (id) => {
+    setSelectedBudgetId(id);
+    setTab("dashboard");
+  };
+
+  const clearSelectedBudget = () => setSelectedBudgetId(null);
   return (
     <div style={{ minHeight: "100vh" }}>
       {/* Header */}
       <header style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 24, letterSpacing: "0.1em", color: "var(--accent)" }}>BUDGET</div>
         <nav style={{ display: "flex" }}>
-          {["dashboard","transactions"].map(t => (
+          {["dashboard","transactions","budgets"].map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: "none", border: "none", cursor: "pointer", padding: "0 16px", height: 52,
               fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em",
@@ -292,20 +457,27 @@ export default function App() {
       <main style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
         {tab === "dashboard" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <SummaryStats />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)", marginBottom: 20 }}>Spending by Category</div>
-                <CategoryBars />
-              </div>
-              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)", marginBottom: 20 }}>Recent Activity</div>
-                <RecentActivity />
-              </div>
-            </div>
+            {selectedBudgetId ? (
+              <BudgetDashboard budgetId={selectedBudgetId} onClearBudget={clearSelectedBudget} />
+            ) : (
+              <>
+                <SummaryStats />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)", marginBottom: 20 }}>Spending by Category</div>
+                    <CategoryBars />
+                  </div>
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted2)", marginBottom: 20 }}>Recent Activity</div>
+                    <RecentActivity />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
         {tab === "transactions" && <TransactionsTab />}
+        {tab === "budgets" && <BudgetsTab onSelectBudget={handleSelectBudget} />}
       </main>
     </div>
   );

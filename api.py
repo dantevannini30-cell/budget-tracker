@@ -1,7 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import sqlite3
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
+from database import init_db, create_budget
+import json
+
+init_db()
 
 app = FastAPI()
 
@@ -41,6 +47,7 @@ def get_transactions():
     cursor.execute("""
         SELECT id, date, amount, description, category, account_id
         FROM transactions
+        WHERE LOWER(description) NOT LIKE '%transfer%'
         ORDER BY date DESC
         LIMIT 50
     """)
@@ -49,6 +56,112 @@ def get_transactions():
     conn.close()
 
     return rows
+
+
+class BudgetCreate(BaseModel):
+    start_date: str
+
+
+@app.get("/api/budgets")
+def get_budgets():
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, start_date, created_at, transaction_count, balances
+        FROM budgets
+        ORDER BY created_at DESC
+    """)
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    for row in rows:
+        row["balances"] = json.loads(row["balances"]) if row["balances"] else {}
+    conn.close()
+    return rows
+
+
+@app.post("/api/budgets")
+def create_budget_endpoint(budget: BudgetCreate):
+    try:
+        datetime.strptime(budget.start_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start_date must be YYYY-MM-DD")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id
+        FROM transactions
+        WHERE date >= ?
+          AND LOWER(description) NOT LIKE '%transfer%'
+        ORDER BY date DESC
+    """, (budget.start_date,))
+
+    transaction_ids = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    return create_budget(budget.start_date, transaction_ids)
+
+
+@app.get("/api/budgets/{budget_id}/summary")
+def budget_summary(budget_id: str):
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, start_date, created_at, transaction_count, balances
+        FROM budgets
+        WHERE id = ?
+    """, (budget_id,))
+
+    budget = cursor.fetchone()
+    if not budget:
+        raise HTTPException(status_code=404, detail="Budget not found")
+
+    budget = dict(budget)
+    budget["balances"] = json.loads(budget["balances"]) if budget["balances"] else {}
+
+    cursor.execute("""
+        SELECT t.amount, t.date
+        FROM transactions t
+        JOIN budget_transactions bt ON bt.transaction_id = t.id
+        WHERE bt.budget_id = ?
+          AND LOWER(t.description) NOT LIKE '%transfer%'
+    """, (budget_id,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    total_in = sum(row["amount"] for row in rows if row["amount"] > 0)
+    total_out = sum(abs(row["amount"]) for row in rows if row["amount"] < 0)
+    net = total_in - total_out
+
+    cutoff = (datetime.utcnow() - timedelta(days=7)).date().isoformat()
+    last_week_rows = [row for row in rows if row["date"][:10] >= cutoff]
+    last_week_in = sum(row["amount"] for row in last_week_rows if row["amount"] > 0)
+    last_week_out = sum(abs(row["amount"]) for row in last_week_rows if row["amount"] < 0)
+    last_week_net = last_week_in - last_week_out
+
+    total_balance = sum(budget["balances"].values()) if budget["balances"] else 0
+
+    return {
+        **budget,
+        "summary": {
+            "all": {
+                "total_in": round(total_in, 2),
+                "total_out": round(total_out, 2),
+                "net": round(net, 2),
+                "total_balance": round(total_balance, 2),
+            },
+            "last_week": {
+                "total_in": round(last_week_in, 2),
+                "total_out": round(last_week_out, 2),
+                "net": round(last_week_net, 2),
+            },
+        },
+    }
 
 
 # ---------------------------
@@ -67,6 +180,7 @@ def spending_by_category():
             ROUND(SUM(ABS(amount)), 2) as total
         FROM transactions
         WHERE amount < 0
+          AND LOWER(description) NOT LIKE '%transfer%'
         GROUP BY category
         ORDER BY total DESC
     """)
