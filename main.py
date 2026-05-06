@@ -62,6 +62,50 @@ def fetch_transactions():
 
     return transactions
 
+
+def fetch_in_range(start_date, end_date):
+    url = "https://api.akahu.io/v1/transactions"
+
+    headers = {
+        "Authorization": f"Bearer {AKAHU_USER_TOKEN}",
+        "X-Akahu-ID": YOUR_APP_TOKEN
+    }
+
+    all_transactions = []
+    cursor = None
+
+    while True:
+        params = {
+            "start": start_date,
+            "end": end_date
+        }
+
+        if cursor:
+            params["cursor"] = cursor
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            print("Error fetching transactions:", response.text)
+            break
+
+        data = response.json()
+        items = data.get("items", [])
+
+        for txn in items:
+            if txn.get("pending"):
+                continue
+            all_transactions.append(txn)
+
+        print(f"Fetched {len(items)} txns (total {len(all_transactions)})")
+
+        cursor = data.get("cursor", {}).get("next")
+        if not cursor:
+            break
+
+    return all_transactions
+
+
 # ---------------------------
 # 2. Connect to Google Sheets
 # ---------------------------
@@ -103,6 +147,18 @@ def format_row(transaction):
         "",  # category
         txn_id
     ]
+
+
+def simple_filter(transactions):
+    filtered = []
+    for txn in transactions:
+        desc = txn.get("description", "").lower()
+
+        if "transfer" in desc:
+            continue
+
+        filtered.append(txn)
+    return filtered
 # ---------------------------
 # 4. Push to sheet
 # ---------------------------
@@ -126,6 +182,8 @@ def push_transactions(sheet, transactions):
         print(f"Added {len(rows)} new rows.")
     else:
         print("No new rows to add.")
+
+
 # ---------------------------
 # 5. Main flow
 # ---------------------------
@@ -139,14 +197,23 @@ def main():
 
     print(f"Fetched {len(transactions)} transactions.")
 
+
+
+    print("Filtering internal transfers...")
+    filtered_transactions = simple_filter(transactions)
+
+    print(f"{len(filtered_transactions)} transactions after filtering.")
+
     print("Connecting to Google Sheets...")
     sheet = connect_to_sheet()
 
     print("Pushing to sheet...")
-    push_transactions(sheet, transactions)
+    push_transactions(sheet, filtered_transactions)
 
     print("Done.")
 
 
 if __name__ == "__main__":
     main()
+    # transactions = fetch_in_range("2026-01-01", "2026-05-01")
+    # print(transactions)
