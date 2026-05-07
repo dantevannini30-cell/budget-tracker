@@ -98,7 +98,7 @@ def create_budget_endpoint(budget: BudgetCreate):
         from main import fetch_transactions
         from utils import clean_transactions
         
-        raw_transactions = fetch_transactions()
+        raw_transactions = fetch_transactions(start_date=budget.start_date)
         cleaned = clean_transactions(raw_transactions)
         ingest_transactions(cleaned)
     except Exception as e:
