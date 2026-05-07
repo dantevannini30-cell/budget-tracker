@@ -14,6 +14,11 @@ import CategoryModal from "@/components/CategoryModal";
 import FilterDropdown from "@/components/FilterDropdown";
 import SortDropdown from "@/components/SortDropdown";
 
+
+import SpendingTargetsSection from "./goals/SpendingTargetsSection";
+import SavingGoalsSection from "./goals/SavingGoalsSection";
+
+
 // Import the logic shared with the Transactions Tab
 import {
   DEFAULT_FILTERS,
@@ -237,6 +242,22 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
         <PieChartWrapper data={weekCatsIncome} title="Last 7d Income by Category" />
         <PieChartWrapper data={weekCatsExpense} title="Last 7d Expenses by Category" />
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(2, minmax(0, 1fr))",
+          gap: 16,
+        }}
+      >
+        <SpendingTargetsSection
+          budgetId={budgetId}
+        />
+
+        <SavingGoalsSection
+          budgetId={budgetId}
+        />
       </div>
 
       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2, padding: 24 }}>
