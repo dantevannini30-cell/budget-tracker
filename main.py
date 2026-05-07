@@ -31,37 +31,10 @@ DATE_CUTOFF = os.getenv("DATE_CUTOFF")
 # ---------------------------
 # 1. Fetch transactions
 # ---------------------------
-def fetch_transactions():
-    url = "https://api.akahu.io/v1/transactions"
-
-    headers = {
-        "Authorization": f"Bearer {AKAHU_USER_TOKEN}",
-        "X-Akahu-ID": YOUR_APP_TOKEN
-    }
-
-    response = requests.get(url, headers=headers)
-
-    if response.status_code != 200:
-        print("Error fetching transactions:", response.text)
-        return []
-
-    data = response.json()
-    transactions = data.get("items", [])
-
-    # Apply date cutoff
-    if DATE_CUTOFF:
-        cutoff_date = datetime.strptime(DATE_CUTOFF, "%Y-%m-%d")
-
-        filtered = []
-        for txn in transactions:
-            txn_date = datetime.fromisoformat(txn["date"].replace("Z", ""))
-            if txn_date > cutoff_date:
-                filtered.append(txn)
-
-        return filtered
-
-    return transactions
-
+def fetch_transactions(start_date: str = None):
+    start = start_date or DATE_CUTOFF or "2024-01-01"
+    end_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return fetch_in_range(start, end_date)
 
 def fetch_in_range(start_date, end_date):
     url = "https://api.akahu.io/v1/transactions"
