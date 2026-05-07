@@ -106,30 +106,6 @@ def fetch_in_range(start_date, end_date):
     return all_transactions
 
 
-# ---------------------------
-# 2. Connect to Google Sheets
-# ---------------------------
-def connect_to_sheet():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
-    creds = Credentials.from_service_account_file(
-        GOOGLE_CREDS_FILE,
-        scopes=scopes
-    )
-
-    client = gspread.authorize(creds)
-
-    sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
-
-    return sheet
-
-
-# ---------------------------
-# 3. Format transaction row
-# ---------------------------
 def format_row(transaction):
     raw_date = transaction.get("date")
     description = transaction.get("description")
@@ -187,31 +163,23 @@ def push_transactions(sheet, transactions):
 # ---------------------------
 # 5. Main flow
 # ---------------------------
+from utils import clean_transactions
+from database import init_db, ingest_transactions
+
 def main():
+    print("Initialising DB...")
+    init_db()
+
     print("Fetching transactions...")
-    transactions = fetch_transactions()
+    raw_transactions = fetch_transactions()
 
-    if not transactions:
-        print("No transactions found.")
-        return
+    print("Cleaning transactions...")
+    cleaned = clean_transactions(raw_transactions)
 
-    print(f"Fetched {len(transactions)} transactions.")
-
-
-
-    print("Filtering internal transfers...")
-    filtered_transactions = simple_filter(transactions)
-
-    print(f"{len(filtered_transactions)} transactions after filtering.")
-
-    print("Connecting to Google Sheets...")
-    sheet = connect_to_sheet()
-
-    print("Pushing to sheet...")
-    push_transactions(sheet, filtered_transactions)
+    print("Ingesting into database...")
+    ingest_transactions(cleaned)
 
     print("Done.")
-
 
 if __name__ == "__main__":
     main()
