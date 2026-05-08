@@ -68,7 +68,30 @@ def fetch_in_range(start_date, end_date):
         for txn in items:
             if txn.get("pending"):
                 continue
-            all_transactions.append(txn)
+
+            # ---------------------------
+            # FLATTEN HERE (IMPORTANT FIX)
+            # ---------------------------
+
+            flat = {
+                "_id": txn.get("id"),
+                "date": txn.get("date"),
+                "amount": txn.get("amount"),
+                "description": txn.get("description", ""),
+                "_account": txn.get("account", {}).get("id"),
+                "balance": txn.get("balance"),
+            }
+
+            # FIX CATEGORY (THIS WAS YOUR CRASH)
+            category = txn.get("category", "")
+
+            if isinstance(category, dict):
+                # Akahu format varies: name OR code
+                category = category.get("name") or category.get("code") or ""
+
+            flat["category"] = category
+
+            all_transactions.append(flat)
 
         print(f"Fetched {len(items)} txns (total {len(all_transactions)})")
 
@@ -77,7 +100,6 @@ def fetch_in_range(start_date, end_date):
             break
 
     return all_transactions
-
 
 def format_row(transaction):
     raw_date = transaction.get("date")
