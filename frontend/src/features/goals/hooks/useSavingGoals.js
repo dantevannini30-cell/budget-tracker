@@ -8,17 +8,22 @@ import {
 import {
   getSavingGoals,
   createSavingGoal,
+  updateSavingGoal,
 } from "@/api/goals";
+
+const today = () => new Date().toISOString().slice(0, 10);
+const blankForm = () => ({
+  name: "",
+  target_amount: "",
+  current_amount: "",
+  start_date: today(),
+});
 
 export default function useSavingGoals() {
   const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [form, setForm] = useState({
-    name: "",
-    target_amount: "",
-    current_amount: "",
-  });
+  const [form, setForm] = useState(blankForm);
 
   const requestIdRef = useRef(0);
 
@@ -60,13 +65,10 @@ export default function useSavingGoals() {
         name: form.name,
         target_amount: Number(form.target_amount),
         current_amount: Number(form.current_amount || 0),
+        start_date: form.start_date,
       });
 
-      setForm({
-        name: "",
-        target_amount: "",
-        current_amount: "",
-      });
+      setForm(blankForm());
 
       // 🔥 CRITICAL FIX: re-fetch from backend instead of appending
       await loadGoals();
@@ -77,11 +79,33 @@ export default function useSavingGoals() {
     }
   }
 
+  async function handleUpdate(id) {
+    try {
+      setLoading(true);
+
+      await updateSavingGoal(id, {
+        name: form.name,
+        target_amount: Number(form.target_amount),
+        current_amount: Number(form.current_amount || 0),
+        start_date: form.start_date,
+      });
+
+      setForm(blankForm());
+      await loadGoals();
+    } catch (err) {
+      console.error("Failed updating saving goal:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return {
     goals,
     form,
     setForm,
     handleSubmit,
+    handleUpdate,
+    resetForm: () => setForm(blankForm()),
     reloadGoals: loadGoals,
     loading,
   };

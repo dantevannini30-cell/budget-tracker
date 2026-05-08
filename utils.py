@@ -1,6 +1,6 @@
 import sqlite3
-from datetime import datetime, timedelta
 from classifier import classify_transaction
+from database import get_current_period_start
 DB_FILE = "transactions.db"
 
 
@@ -46,7 +46,7 @@ def calculate_spending_target_progress(target_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT name, amount, period
+        SELECT name, amount, period, start_date
         FROM spending_targets
         WHERE id = ?
     """, (target_id,))
@@ -67,14 +67,7 @@ def calculate_spending_target_progress(target_id):
     if not categories:
         return {"spent": 0, "target": target["amount"], "remaining": target["amount"], "pct": 0}
 
-    now = datetime.now()
-
-    if target["period"] == "weekly":
-        start = now - timedelta(days=7)
-    elif target["period"] == "yearly":
-        start = now.replace(month=1, day=1)
-    else:
-        start = now.replace(day=1)
+    start = get_current_period_start(target["start_date"], target["period"])
 
     placeholders = ",".join(["?"] * len(categories))
 
@@ -84,7 +77,7 @@ def calculate_spending_target_progress(target_id):
         WHERE amount < 0
         AND category IN ({placeholders})
         AND date >= ?
-    """, categories + [start.strftime("%Y-%m-%d")])
+    """, categories + [start])
 
     spent = cursor.fetchone()[0] or 0
 

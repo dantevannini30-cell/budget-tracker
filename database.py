@@ -1,5 +1,6 @@
 import sqlite3
 import uuid
+from datetime import date, datetime, timedelta
 
 DB_FILE = "transactions.db"
 
@@ -23,7 +24,8 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT,
             target_amount REAL,
-            current_amount REAL
+            current_amount REAL,
+            start_date TEXT
         )
     """)
 
@@ -32,7 +34,8 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT,
             amount REAL,
-            period TEXT
+            period TEXT,
+            start_date TEXT
         )
     """)
 
@@ -57,8 +60,19 @@ def init_db():
     )
 """)
 
+    ensure_column(cursor, "saving_goals", "start_date", "TEXT")
+    ensure_column(cursor, "spending_targets", "start_date", "TEXT")
+
     conn.commit()
     conn.close()
+
+
+def ensure_column(cursor, table_name, column_name, column_type):
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = {row["name"] for row in cursor.fetchall()}
+
+    if column_name not in columns:
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def ingest_transactions(transactions):
@@ -114,16 +128,21 @@ def get_latest_transaction_date():
 # SPENDING TARGETS
 # ---------------------------
 
-def create_spending_target(name, amount, period, categories):
+def today_iso():
+    return date.today().isoformat()
+
+
+def create_spending_target(name, amount, period, categories, start_date=None):
     conn = get_connection()
     cursor = conn.cursor()
 
     target_id = uuid.uuid4().hex
+    start_date = start_date or today_iso()
 
     cursor.execute("""
-        INSERT INTO spending_targets (id, name, amount, period)
-        VALUES (?, ?, ?, ?)
-    """, (target_id, name, amount, period))
+        INSERT INTO spending_targets (id, name, amount, period, start_date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (target_id, name, amount, period, start_date))
 
     for c in categories:
         cursor.execute("""
@@ -139,6 +158,46 @@ def create_spending_target(name, amount, period, categories):
         "name": name,
         "amount": amount,
         "period": period,
+        "start_date": start_date,
+        "categories": categories,
+    }
+
+
+def update_spending_target(target_id, name, amount, period, categories, start_date=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    start_date = start_date or today_iso()
+
+    cursor.execute("""
+        UPDATE spending_targets
+        SET name = ?, amount = ?, period = ?, start_date = ?
+        WHERE id = ?
+    """, (name, amount, period, start_date, target_id))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return None
+
+    cursor.execute("""
+        DELETE FROM spending_target_categories
+        WHERE target_id = ?
+    """, (target_id,))
+
+    for category in categories:
+        cursor.execute("""
+            INSERT OR IGNORE INTO spending_target_categories (target_id, category)
+            VALUES (?, ?)
+        """, (target_id, category))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": target_id,
+        "name": name,
+        "amount": amount,
+        "period": period,
+        "start_date": start_date,
         "categories": categories,
     }
 
@@ -167,16 +226,17 @@ def get_spending_targets():
 # SAVING GOALS
 # ---------------------------
 
-def create_saving_goal(name, target_amount, current_amount=0):
+def create_saving_goal(name, target_amount, current_amount=0, start_date=None):
     conn = get_connection()
     cursor = conn.cursor()
 
     goal_id = uuid.uuid4().hex
+    start_date = start_date or today_iso()
 
     cursor.execute("""
-        INSERT INTO saving_goals (id, name, target_amount, current_amount)
-        VALUES (?, ?, ?, ?)
-    """, (goal_id, name, target_amount, current_amount))
+        INSERT INTO saving_goals (id, name, target_amount, current_amount, start_date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (goal_id, name, target_amount, current_amount, start_date))
 
     conn.commit()
     conn.close()
@@ -186,6 +246,34 @@ def create_saving_goal(name, target_amount, current_amount=0):
         "name": name,
         "target_amount": target_amount,
         "current_amount": current_amount,
+        "start_date": start_date,
+    }
+
+
+def update_saving_goal(goal_id, name, target_amount, current_amount=0, start_date=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    start_date = start_date or today_iso()
+
+    cursor.execute("""
+        UPDATE saving_goals
+        SET name = ?, target_amount = ?, current_amount = ?, start_date = ?
+        WHERE id = ?
+    """, (name, target_amount, current_amount, start_date, goal_id))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return None
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": goal_id,
+        "name": name,
+        "target_amount": target_amount,
+        "current_amount": current_amount,
+        "start_date": start_date,
     }
 
 
@@ -217,31 +305,105 @@ def get_spending_targets_with_progress():
     for row in cursor.fetchall():
         category_map.setdefault(row["target_id"], []).append(row["category"])
 
-    cursor.execute("""
-        SELECT category, COALESCE(SUM(ABS(amount)), 0) AS spent
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY category
-    """)
-
-    spending_map = {row["category"]: row["spent"] for row in cursor.fetchall()}
-
-    conn.close()
-
     result = []
+    today = date.today()
 
     for target in targets:
         categories = category_map.get(target["id"], [])
-        spent = sum(spending_map.get(category, 0) for category in categories)
+        period_start = get_current_period_start(
+            target.get("start_date"),
+            target.get("period"),
+            today,
+        )
+        spent = get_spent_for_categories(cursor, categories, period_start)
         amount = target["amount"]
 
         result.append({
             **target,
             "categories": categories,
+            "period_start": period_start,
             "current_spent": spent,
             "remaining": amount - spent,
             "progress_pct": (spent / amount * 100) if amount else 0,
             "is_over": spent > amount,
         })
 
+    conn.close()
     return result
+
+
+def get_spent_for_categories(cursor, categories, start_date):
+    if not categories:
+        return 0
+
+    placeholders = ",".join(["?"] * len(categories))
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ABS(amount)), 0) AS spent
+        FROM transactions
+        WHERE amount < 0
+        AND category IN ({placeholders})
+        AND date >= ?
+    """, categories + [start_date])
+
+    return cursor.fetchone()["spent"] or 0
+
+
+def get_current_period_start(start_date, period, today=None):
+    today = today or date.today()
+    anchor = parse_date(start_date) or today
+
+    if anchor > today:
+        return anchor.isoformat()
+
+    if period == "weekly":
+        elapsed_days = (today - anchor).days
+        return (anchor + timedelta(days=(elapsed_days // 7) * 7)).isoformat()
+
+    if period == "monthly":
+        current = anchor
+        while True:
+            next_date = add_months(current, 1)
+            if next_date > today:
+                return current.isoformat()
+            current = next_date
+
+    if period == "yearly":
+        current = anchor
+        while True:
+            next_date = add_years(current, 1)
+            if next_date > today:
+                return current.isoformat()
+            current = next_date
+
+    return anchor.isoformat()
+
+
+def parse_date(value):
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value[:10]).date()
+    except ValueError:
+        return None
+
+
+def add_months(value, months):
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, days_in_month(year, month))
+    return date(year, month, day)
+
+
+def add_years(value, years):
+    year = value.year + years
+    day = min(value.day, days_in_month(year, value.month))
+    return date(year, value.month, day)
+
+
+def days_in_month(year, month):
+    if month == 12:
+        return 31
+
+    return (date(year, month + 1, 1) - timedelta(days=1)).day

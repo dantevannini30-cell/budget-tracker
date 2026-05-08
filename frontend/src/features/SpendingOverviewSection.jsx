@@ -163,8 +163,6 @@ export default function SpendingOverviewSection({
 
   const summary = data?.summary ?? [];
   const incomeSummary = data?.income_summary ?? [];
-  const spendingTargets = data?.spending_targets ?? [];
-
   const incomeData = incomeSummary.map((i) => ({
     name: i.category,
     value: i.total,
@@ -360,39 +358,6 @@ export default function SpendingOverviewSection({
         </div>
       )}
 
-      {/* Spending Targets */}
-      {!loading && (
-        <div>
-          <h3>Budget Targets</h3>
-
-          {spendingTargets.map((t) => (
-            <div key={t.id}>
-              <strong>{t.name}</strong>
-
-              <div>
-                {t.current_spent} / {t.amount}
-              </div>
-
-              <div
-                style={{
-                  height: 8,
-                  background: "#eee",
-                }}
-              >
-                <div
-                  style={{
-                    width: `${t.progress_pct}%`,
-                    height: "100%",
-                    background: t.is_over
-                      ? "red"
-                      : "green",
-                  }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

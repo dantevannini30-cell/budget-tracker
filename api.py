@@ -11,8 +11,10 @@ from database import (
     ingest_transactions,
     get_latest_transaction_date,
     create_spending_target,
+    update_spending_target,
     get_spending_targets_with_progress,
     create_saving_goal,
+    update_saving_goal,
     get_saving_goals,
 )
 
@@ -60,12 +62,14 @@ class SpendingTargetCreate(BaseModel):
     amount: float
     period: str
     categories: list[str]
+    start_date: str | None = None
 
 
 class SavingGoalCreate(BaseModel):
     name: str
     target_amount: float
     current_amount: float = 0
+    start_date: str | None = None
 
 
 # ---------------------------
@@ -240,7 +244,25 @@ def create_target(target: SpendingTargetCreate):
         target.amount,
         target.period,
         target.categories,
+        target.start_date,
     )
+
+
+@app.put("/api/spending-targets/{target_id}")
+def update_target(target_id: str, target: SpendingTargetCreate):
+    updated = update_spending_target(
+        target_id,
+        target.name,
+        target.amount,
+        target.period,
+        target.categories,
+        target.start_date,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Spending target not found")
+
+    return updated
 
 
 @app.get("/api/spending-targets/{target_id}/progress")
@@ -263,7 +285,24 @@ def create_goal(goal: SavingGoalCreate):
         goal.name,
         goal.target_amount,
         goal.current_amount,
+        goal.start_date,
     )
+
+
+@app.put("/api/saving-goals/{goal_id}")
+def update_goal(goal_id: str, goal: SavingGoalCreate):
+    updated = update_saving_goal(
+        goal_id,
+        goal.name,
+        goal.target_amount,
+        goal.current_amount,
+        goal.start_date,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Saving goal not found")
+
+    return updated
 
 
 @app.get("/api/saving-goals/{goal_id}/progress")
