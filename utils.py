@@ -1,108 +1,124 @@
-from datetime import datetime
-from database import get_connection
+import sqlite3
+from classifier import classify_transaction
+from database import get_current_period_start
+DB_FILE = "transactions.db"
 
 
-def categorise_transaction(transaction):
-    return ""  # placeholder for LLM classifier later
+def get_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
+# ---------------------------
+# CLEANING
+# ---------------------------
+import uuid
 def clean_transactions(transactions):
     cleaned = []
 
     for txn in transactions:
         if txn.get("pending"):
             continue
-
+        if "transfer" in txn.get("description", "").lower():
+            continue
+        txn_id = txn.get("id") or uuid.uuid4().hex
         cleaned.append({
-            "_id": txn["_id"],
+            "id": txn_id,
             "date": txn["date"],
             "amount": txn["amount"],
             "description": "",
-            "category": categorise_transaction(txn),
+            "category": classify_transaction(txn),
             "statement": txn.get("description", ""),
-            "_account": txn["_account"],
-            "balance": txn.get("balance")
+            "_account": txn.get("_account", ""),
+            "account_name": txn.get("account_name", ""),
+            "balance": txn.get("balance"),
         })
 
     return cleaned
 
 
-# ─────────────────────────────────────────────
-# FIX: SPENDING TARGET PROGRESS
-# ─────────────────────────────────────────────
-def calculate_spending_target_progress(budget_id: str, target_id: str):
+# ---------------------------
+# SPENDING TARGET PROGRESS
+# ---------------------------
+
+def calculate_spending_target_progress(target_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT amount, period
+        SELECT name, amount, period, start_date
         FROM spending_targets
-        WHERE id = ? AND budget_id = ?
-    """, (target_id, budget_id))
+        WHERE id = ?
+    """, (target_id,))
 
     target = cursor.fetchone()
-    if not target:
-        conn.close()
-        raise ValueError("Target not found")
 
-    target_amount = target[0]
+    if not target:
+        return {"spent": 0, "target": 0, "remaining": 0, "pct": 0}
 
     cursor.execute("""
-        SELECT t.amount
-        FROM transactions t
-        JOIN budget_transactions bt ON bt.transaction_id = t.id
-        WHERE bt.budget_id = ?
-          AND t.amount < 0
-    """, (budget_id,))
+        SELECT category
+        FROM spending_target_categories
+        WHERE target_id = ?
+    """, (target_id,))
 
-    spent = sum(abs(r[0]) for r in cursor.fetchall())
+    categories = [r["category"] for r in cursor.fetchall()]
+
+    if not categories:
+        return {"spent": 0, "target": target["amount"], "remaining": target["amount"], "pct": 0}
+
+    start = get_current_period_start(target["start_date"], target["period"])
+
+    placeholders = ",".join(["?"] * len(categories))
+
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ABS(amount)), 0)
+        FROM transactions
+        WHERE amount < 0
+        AND category IN ({placeholders})
+        AND date >= ?
+    """, categories + [start])
+
+    spent = cursor.fetchone()[0] or 0
+
+    target_amount = target["amount"]
 
     conn.close()
 
     return {
+        "spent": spent,
         "target": target_amount,
-        "spent": round(spent, 2),
-        "remaining": round(target_amount - spent, 2),
-        "pct": round((spent / target_amount) * 100, 1) if target_amount else 0
+        "remaining": max(target_amount - spent, 0),
+        "pct": round((spent / target_amount) * 100, 1) if target_amount else 0,
     }
 
 
-# ─────────────────────────────────────────────
-# FIX: SAVING GOAL PROGRESS
-# ─────────────────────────────────────────────
-def calculate_saving_goal_progress(budget_id: str, goal_id: str):
+# ---------------------------
+# SAVING GOAL PROGRESS
+# ---------------------------
+def calculate_saving_goal_progress(goal_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT target, start_balance, by_date
+        SELECT target_amount, current_amount
         FROM saving_goals
-        WHERE id = ? AND budget_id = ?
-    """, (goal_id, budget_id))
+        WHERE id = ?
+    """, (goal_id,))
 
     goal = cursor.fetchone()
-    if not goal:
-        conn.close()
-        raise ValueError("Goal not found")
-
-    target, start_balance, by_date = goal
-
-    cursor.execute("""
-        SELECT SUM(amount)
-        FROM transactions t
-        JOIN budget_transactions bt ON bt.transaction_id = t.id
-        WHERE bt.budget_id = ?
-    """, (budget_id,))
-
-    net = cursor.fetchone()[0] or 0
-    current = (start_balance or 0) + net
-
     conn.close()
 
+    if not goal:
+        return {"saved": 0, "target": 0, "remaining": 0, "pct": 0}
+
+    target = goal["target_amount"]
+    current = goal["current_amount"]
+
     return {
+        "saved": current,
         "target": target,
-        "saved": round(current, 2),
-        "remaining": round(target - current, 2),
+        "remaining": max(target - current, 0),
         "pct": round((current / target) * 100, 1) if target else 0,
-        "by_date": by_date
     }

@@ -1,8 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import GoalProgressChart from "./GoalProgressChart";
 import useSavingGoals from "./hooks/useSavingGoals";
-import { buildSavingGoalChartData } from "./utils/chartUtils";
 
 import {
   cardStyle,
@@ -10,174 +8,443 @@ import {
   primaryBtn,
 } from "@/shared/styles/ui";
 
+const HISTORY_COUNTS = [4, 8, 12, 24];
+
+function SavingHistoryPanel({ count, onCountChange }) {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        paddingTop: 14,
+        borderTop: "1px solid var(--border)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            color: "var(--muted2)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            textTransform: "uppercase",
+          }}
+        >
+          Progress history
+        </div>
+
+        <select
+          value={count}
+          onChange={(e) => onCountChange(Number(e.target.value))}
+          style={{
+            ...inputStyle,
+            padding: "5px 8px",
+            width: 88,
+          }}
+        >
+          {HISTORY_COUNTS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div
+        style={{
+          height: 140,
+          border: "1px solid var(--border2)",
+          background: "var(--surface2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          color: "var(--muted2)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          textAlign: "center",
+        }}
+      >
+        Saving goals only store the current amount right now. Add dated saving
+        updates to chart progress over time.
+      </div>
+    </div>
+  );
+}
+
 export default function SavingGoalsSection({
   budgetId,
 }) {
   const {
     goals,
-    progress,
+    accounts,
     form,
     setForm,
     handleSubmit,
+    handleUpdate,
+    resetForm,
     loading,
   } = useSavingGoals(budgetId);
 
-  const chartData =
-    buildSavingGoalChartData(
-      goals,
-      progress
-    );
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [historyCounts, setHistoryCounts] = useState({});
+
+  const submitAndClose = async (e) => {
+    e.preventDefault();
+
+    if (editingId) {
+      await handleUpdate(editingId);
+    } else {
+      await handleSubmit(e);
+    }
+
+    setEditingId(null);
+    setModalOpen(false);
+  };
+
+  const openCreateModal = () => {
+    resetForm();
+    setEditingId(null);
+    setModalOpen(true);
+  };
+
+  const openEditModal = (goal) => {
+    setForm({
+      name: goal.name || "",
+      target_amount: String(goal.target_amount ?? ""),
+      current_amount: String(goal.current_amount ?? ""),
+      start_date: (goal.start_date || "").slice(0, 10),
+      account_id: goal.account_id || "",
+    });
+    setEditingId(goal.id);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    resetForm();
+    setEditingId(null);
+    setModalOpen(false);
+  };
 
   return (
     <div
       style={{
         ...cardStyle,
-        padding: 22,
+        padding: 0,
       }}
     >
       <div
         style={{
-          fontFamily: "var(--font-display)",
-          fontSize: 28,
-          marginBottom: 18,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          padding: "18px 20px",
+          borderBottom: "1px solid var(--border)",
         }}
       >
-        Saving Goals
+        <div
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: 28,
+          }}
+        >
+          Saving Goals
+        </div>
+
+        <button
+          type="button"
+          onClick={openCreateModal}
+          style={primaryBtn}
+        >
+          Add
+        </button>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-          marginBottom: 24,
-        }}
-      >
-        <input
-          placeholder="Goal name"
-          value={form.name}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              name: e.target.value,
-            })
-          }
-          style={inputStyle}
-          required
-        />
+      {modalOpen && (
+        <div
+          onClick={closeModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.58)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 1000,
+          }}
+        >
+          <form
+            onSubmit={submitAndClose}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...cardStyle,
+              width: "100%",
+              maxWidth: 420,
+              padding: 22,
+              position: "relative",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              boxShadow: "0 18px 48px rgba(0,0,0,0.42)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={closeModal}
+              aria-label="Close"
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                width: 28,
+                height: 28,
+                border: "1px solid var(--border2)",
+                borderRadius: 2,
+                background: "var(--surface2)",
+                color: "var(--muted2)",
+                cursor: "pointer",
+                fontSize: 18,
+                lineHeight: "24px",
+              }}
+            >
+              ×
+            </button>
 
-        <input
-          type="number"
-          placeholder="Target amount"
-          value={form.target_amount}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              target_amount: e.target.value,
-            })
-          }
-          style={inputStyle}
-          required
-        />
+            <div
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: 24,
+                marginBottom: 4,
+              }}
+            >
+              {editingId ? "Edit Saving Goal" : "Add Saving Goal"}
+            </div>
 
-        <input
-          type="number"
-          placeholder="Current amount (optional)"
-          value={form.current_amount}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              current_amount: e.target.value,
-            })
-          }
-          style={inputStyle}
-        />
+            <input
+              placeholder="Goal name"
+              value={form.name}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  name: e.target.value,
+                })
+              }
+              style={inputStyle}
+              required
+            />
 
-        <button type="submit" style={primaryBtn} disabled={loading}>
-          {loading ? "Adding..." : "Add Saving Goal"}
-        </button>
-      </form>
+            <input
+              type="number"
+              placeholder="Target amount"
+              value={form.target_amount}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  target_amount: e.target.value,
+                })
+              }
+              style={inputStyle}
+              required
+            />
 
-      <GoalProgressChart
-        title="Saving Progress"
-        data={chartData}
-        color="#00d4aa"
-      />
+            <input
+              type="number"
+              placeholder={form.account_id ? "Current amount from account" : "Current amount (optional)"}
+              value={form.current_amount}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  current_amount: e.target.value,
+                })
+              }
+              style={inputStyle}
+              disabled={Boolean(form.account_id)}
+            />
+
+            {accounts.length > 0 && (
+              <select
+                value={form.account_id}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    account_id: e.target.value,
+                  })
+                }
+                style={inputStyle}
+              >
+                <option value="">Manual balance</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · ${Number(account.latest_balance || 0).toFixed(2)}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <input
+              type="date"
+              value={form.start_date}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  start_date: e.target.value,
+                })
+              }
+              style={inputStyle}
+              required
+            />
+
+            <button type="submit" style={primaryBtn} disabled={loading}>
+              {loading ? "Saving..." : editingId ? "Save Goal" : "Add Goal"}
+            </button>
+          </form>
+        </div>
+      )}
 
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 14,
-          marginTop: 20,
+          gap: 0,
         }}
       >
-        {goals.map((goal) => {
-          const data = progress[goal.id];
-          const current = data?.saved || goal.current_amount || 0;
-          const target = data?.target || goal.target_amount;
+        {goals.length === 0 ? (
+          <div
+            style={{
+              padding: 20,
+              color: "var(--muted2)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+            }}
+          >
+            No saving goals yet
+          </div>
+        ) : goals.map((goal) => {
+          const current = goal.current_amount || 0;
+          const target = goal.target_amount || 0;
           const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
+          const displayPct = Math.round(pct);
+          const startDate = goal.start_date;
+          const accountLabel = goal.account_name || goal.account_id;
+          const expanded = expandedId === goal.id;
+          const historyCount = historyCounts[goal.id] || 8;
 
           return (
             <div
+              onClick={() => setExpandedId(expanded ? null : goal.id)}
               key={goal.id}
               style={{
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: 16,
+                padding: "16px 20px",
+                borderBottom: "1px solid var(--border)",
+                cursor: "pointer",
               }}
             >
               <div
                 style={{
-                  marginBottom: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 8,
                 }}
               >
                 <div
                   style={{
                     fontWeight: 600,
-                    marginBottom: 4,
+                    minWidth: 0,
                   }}
                 >
                   {goal.name}
                 </div>
 
-                <div
+                <button
+                  type="button"
+                  aria-label={`Edit ${goal.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEditModal(goal);
+                  }}
                   style={{
+                    width: 28,
+                    height: 28,
+                    border: "1px solid var(--border2)",
+                    borderRadius: 2,
+                    background: "var(--surface2)",
                     color: "var(--muted2)",
-                    fontSize: 12,
+                    cursor: "pointer",
+                    fontSize: 18,
+                    lineHeight: "18px",
+                    flexShrink: 0,
                   }}
                 >
-                  ${current.toFixed(2)} / ${target.toFixed(2)}
-                </div>
+                  ⋯
+                </button>
               </div>
 
               <div
                 style={{
-                  height: 10,
+                  color: "var(--muted2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  marginBottom: 8,
+                }}
+              >
+                {displayPct}% · ${current.toFixed(2)} / ${target.toFixed(2)}
+              </div>
+
+              <div
+                style={{
+                  height: 12,
                   background: "var(--surface2)",
-                  borderRadius: 999,
                   overflow: "hidden",
+                  border: "1px solid var(--border2)",
+                  borderRadius: 2,
                 }}
               >
                 <div
                   style={{
                     width: `${pct}%`,
                     height: "100%",
-                    background: "#00d4aa",
+                    background: "var(--accent)",
                   }}
                 />
               </div>
 
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 12,
-                  color: "var(--muted2)",
-                }}
-              >
-                {pct.toFixed(1)}% complete
-              </div>
+              {(startDate || accountLabel) && (
+                <div
+                  style={{
+                    color: "var(--muted)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 10,
+                    marginTop: 7,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {startDate ? `From ${startDate.slice(0, 10)}` : ""}
+                  {accountLabel ? ` · ${accountLabel}` : ""}
+                </div>
+              )}
+
+              {expanded && (
+                <SavingHistoryPanel
+                  count={historyCount}
+                  onCountChange={(count) =>
+                    setHistoryCounts((prev) => ({
+                      ...prev,
+                      [goal.id]: count,
+                    }))
+                  }
+                />
+              )}
             </div>
           );
         })}

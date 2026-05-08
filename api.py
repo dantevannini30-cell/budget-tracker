@@ -1,17 +1,22 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import sqlite3
-import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
+from main import fetch_in_range
+from utils import clean_transactions
 from database import (
     init_db,
-    create_budget,
+    get_connection,
     ingest_transactions,
+    get_latest_transaction_date,
+    get_accounts,
+    get_account_transactions,
     create_spending_target,
-    get_spending_targets,
+    update_spending_target,
+    get_spending_targets_with_progress,
     create_saving_goal,
+    update_saving_goal,
     get_saving_goals,
 )
 
@@ -23,6 +28,7 @@ from utils import (
 # ---------------------------
 # INIT
 # ---------------------------
+
 init_db()
 
 app = FastAPI()
@@ -34,25 +40,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_FILE = "transactions.db"
-
-
-def get_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+@app.on_event("startup")
+def startup():
+    init_db()
 
 
 # ---------------------------
 # MODELS
 # ---------------------------
-class BudgetCreate(BaseModel):
-    start_date: str
-
 
 class TransactionUpdate(BaseModel):
     category: str | None = None
     description: str | None = None
+
+
+class LoadTransactionsRequest(BaseModel):
+    start_date: str
+    end_date: str | None = None
 
 
 class SpendingTargetCreate(BaseModel):
@@ -60,17 +64,21 @@ class SpendingTargetCreate(BaseModel):
     amount: float
     period: str
     categories: list[str]
+    start_date: str | None = None
 
 
 class SavingGoalCreate(BaseModel):
     name: str
     target_amount: float
-    current_amount: float | None = None
+    current_amount: float = 0
+    start_date: str | None = None
+    account_id: str | None = None
 
 
 # ---------------------------
-# HEALTH CHECK
+# HEALTH
 # ---------------------------
+
 @app.get("/api/hello")
 def hello():
     return {
@@ -82,22 +90,64 @@ def hello():
 # ---------------------------
 # TRANSACTIONS
 # ---------------------------
+
+def utc_now_for_akahu():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+@app.post("/api/transactions/load")
+def load_transactions(req: LoadTransactionsRequest):
+
+    transactions = fetch_in_range(req.start_date, req.end_date or utc_now_for_akahu())
+    cleaned = clean_transactions(transactions)
+    inserted_ids = set(ingest_transactions(cleaned))
+
+    return [txn for txn in cleaned if txn["id"] in inserted_ids]
+
+
+@app.post("/api/transactions/refresh")
+def refresh_transactions():
+    latest_date = get_latest_transaction_date()
+
+    if not latest_date:
+        raise HTTPException(400, "No existing transactions. Choose a start date first.")
+
+    transactions = fetch_in_range(latest_date, utc_now_for_akahu())
+    cleaned = clean_transactions(transactions)
+    inserted_ids = set(ingest_transactions(cleaned))
+
+    return {
+        "start_date": latest_date,
+        "transactions": [txn for txn in cleaned if txn["id"] in inserted_ids],
+    }
+
+
 @app.get("/api/transactions")
 def get_transactions():
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, date, amount, description, category, statement, account_id
+        SELECT *
         FROM transactions
         WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
         ORDER BY date DESC
-        LIMIT 50
     """)
 
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
+
     return rows
+
+
+@app.get("/api/accounts")
+def list_accounts():
+    return get_accounts()
+
+
+@app.get("/api/accounts/{account_id}/transactions")
+def list_account_transactions(account_id: str):
+    return get_account_transactions(account_id)
 
 
 @app.put("/api/transactions/{transaction_id}")
@@ -117,7 +167,7 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
         params.append(update.description)
 
     if not updates:
-        raise HTTPException(status_code=400, detail="No update provided")
+        raise HTTPException(400, "No update provided")
 
     query = f"""
         UPDATE transactions
@@ -126,10 +176,11 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
     """
 
     params.append(transaction_id)
+
     cursor.execute(query, params)
 
     if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(404, "Transaction not found")
 
     conn.commit()
     conn.close()
@@ -140,33 +191,8 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
 # ---------------------------
 # SUMMARY
 # ---------------------------
-@app.get("/api/summary")
-def summary():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT
-            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0),
-            COALESCE(SUM(amount), 0)
-        FROM transactions
-        WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
-    """)
-
-    row = cursor.fetchone()
-    conn.close()
-
-    return {
-        "total_in": row[0],
-        "total_out": abs(row[1]),
-        "net": row[2],
-    }
 
 
-# ---------------------------
-# CATEGORY BREAKDOWN
-# ---------------------------
 @app.get("/api/summary/by-category")
 def by_category():
     conn = get_connection()
@@ -174,8 +200,8 @@ def by_category():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') as category,
-            SUM(ABS(amount)) as total
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
         FROM transactions
         WHERE amount < 0
         GROUP BY category
@@ -193,164 +219,224 @@ def by_category():
     return rows
 
 
-# ---------------------------
-# BUDGETS
-# ---------------------------
-@app.get("/api/budgets")
-def get_budgets():
+@app.get("/api/summary/by-category/income")
+def by_category_income():
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, start_date, created_at, transaction_count, balances
-        FROM budgets
-        ORDER BY created_at DESC
-    """)
-
-    rows = []
-    for r in cursor.fetchall():
-        row = dict(r)
-        row["balances"] = json.loads(row["balances"]) if row["balances"] else {}
-        rows.append(row)
-
-    conn.close()
-    return rows
-
-
-@app.post("/api/budgets")
-def create_budget_endpoint(budget: BudgetCreate):
-    datetime.strptime(budget.start_date, "%Y-%m-%d")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
         FROM transactions
-        WHERE date >= ?
-          AND LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
-    """, (budget.start_date,))
-
-    txn_ids = [r[0] for r in cursor.fetchall()]
-    conn.close()
-
-    return create_budget(budget.start_date, txn_ids)
-
-
-@app.get("/api/budgets/{budget_id}/summary")
-def budget_summary(budget_id: str):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM budgets WHERE id = ?", (budget_id,))
-    budget = cursor.fetchone()
-
-    if not budget:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    budget = dict(budget)
-    budget["balances"] = json.loads(budget["balances"]) if budget["balances"] else {}
-
-    cursor.execute("""
-        SELECT amount, date
-        FROM transactions t
-        JOIN budget_transactions bt ON bt.transaction_id = t.id
-        WHERE bt.budget_id = ?
-    """, (budget_id,))
+        WHERE amount > 0
+        GROUP BY category
+        ORDER BY total DESC
+    """)
 
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    total_in = sum(r["amount"] for r in rows if r["amount"] > 0)
-    total_out = sum(abs(r["amount"]) for r in rows if r["amount"] < 0)
+    total = sum(r["total"] for r in rows)
 
-    return {
-        **budget,
-        "summary": {
-            "total_in": total_in,
-            "total_out": total_out,
-            "net": total_in - total_out,
-        },
-    }
+    for r in rows:
+        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
+
+    return rows
 
 
-# ---------------------------
-# SPENDING TARGETS
-# ---------------------------
-@app.post("/api/budgets/{budget_id}/spending-targets")
-def add_target(budget_id: str, target: SpendingTargetCreate):
+@app.get("/api/spending-targets")
+def list_targets():
+    return get_spending_targets_with_progress()
+
+
+@app.post("/api/spending-targets")
+def create_target(target: SpendingTargetCreate):
     return create_spending_target(
-        budget_id,
         target.name,
         target.amount,
         target.period,
         target.categories,
+        target.start_date,
     )
 
 
-@app.get("/api/budgets/{budget_id}/spending-targets")
-def list_targets(budget_id: str):
-    return get_spending_targets(budget_id)
+@app.put("/api/spending-targets/{target_id}")
+def update_target(target_id: str, target: SpendingTargetCreate):
+    updated = update_spending_target(
+        target_id,
+        target.name,
+        target.amount,
+        target.period,
+        target.categories,
+        target.start_date,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Spending target not found")
+
+    return updated
 
 
-@app.get("/api/budgets/{budget_id}/spending-targets/{target_id}/progress")
-def target_progress(budget_id: str, target_id: str):
-    return calculate_spending_target_progress(budget_id, target_id)
+@app.get("/api/spending-targets/{target_id}/progress")
+def target_progress(target_id: str):
+    return calculate_spending_target_progress(target_id)
 
 
 # ---------------------------
 # SAVING GOALS
 # ---------------------------
-@app.post("/api/budgets/{budget_id}/saving-goals")
-def add_goal(budget_id: str, goal: SavingGoalCreate):
-    conn = get_connection()
-    cursor = conn.cursor()
 
-    if goal.current_amount is None:
-        cursor.execute("SELECT balances FROM budgets WHERE id = ?", (budget_id,))
-        row = cursor.fetchone()
-        balances = json.loads(row["balances"]) if row and row["balances"] else {}
-        current_amount = sum(balances.values())
-    else:
-        current_amount = goal.current_amount
+@app.get("/api/saving-goals")
+def list_goals():
+    return get_saving_goals()
 
-    conn.close()
 
+@app.post("/api/saving-goals")
+def create_goal(goal: SavingGoalCreate):
     return create_saving_goal(
-        budget_id,
         goal.name,
         goal.target_amount,
-        None,  # by_date not used in frontend
-        current_amount,
+        goal.current_amount,
+        goal.start_date,
+        goal.account_id,
     )
 
 
-@app.get("/api/budgets/{budget_id}/saving-goals")
-def list_goals(budget_id: str):
-    return get_saving_goals(budget_id)
+@app.put("/api/saving-goals/{goal_id}")
+def update_goal(goal_id: str, goal: SavingGoalCreate):
+    updated = update_saving_goal(
+        goal_id,
+        goal.name,
+        goal.target_amount,
+        goal.current_amount,
+        goal.start_date,
+        goal.account_id,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Saving goal not found")
+
+    return updated
 
 
-@app.get("/api/budgets/{budget_id}/saving-goals/{goal_id}/progress")
-def goal_progress(budget_id: str, goal_id: str):
-    return calculate_saving_goal_progress(budget_id, goal_id)
+@app.get("/api/saving-goals/{goal_id}/progress")
+def goal_progress(goal_id: str):
+    return calculate_saving_goal_progress(goal_id)
 
 
-
-@app.get("/api/budgets/{budget_id}/transactions")
-def get_budget_transactions(budget_id: str):
+@app.get("/api/summary")
+def summary(start_date: str = None, end_date: str = None):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT t.id, t.date, t.amount, t.description, t.category, t.statement, t.account_id
-        FROM transactions t
-        JOIN budget_transactions bt ON bt.transaction_id = t.id
-        WHERE bt.budget_id = ?
-          AND LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
-        ORDER BY t.date DESC
-    """, (budget_id,))
+    query = """
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+    """
 
+    params = []
+
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+
+    query += " GROUP BY category ORDER BY total DESC"
+
+    cursor.execute(query, params)
     rows = [dict(r) for r in cursor.fetchall()]
+
     conn.close()
 
+    total = sum(r["total"] for r in rows)
+
+    for r in rows:
+        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
+
     return rows
+
+
+@app.get("/api/dashboard")
+def dashboard(
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # ---------------------------
+    # SUMMARY (expenses)
+    # ---------------------------
+    query = """
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+    """
+
+    params = []
+
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+
+    query += " GROUP BY category ORDER BY total DESC"
+
+    cursor.execute(query, params)
+    summary = [dict(r) for r in cursor.fetchall()]
+
+    total_spent = sum(r["total"] for r in summary)
+
+    for r in summary:
+        r["pct"] = round((r["total"] / total_spent) * 100, 1) if total_spent else 0
+
+    # ---------------------------
+    # INCOME SUMMARY
+    # ---------------------------
+    cursor.execute("""
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount > 0
+        GROUP BY category
+        ORDER BY total DESC
+    """)
+
+    income_summary = [dict(r) for r in cursor.fetchall()]
+
+    total_income = sum(r["total"] for r in income_summary)
+
+    for r in income_summary:
+        r["pct"] = round((r["total"] / total_income) * 100, 1) if total_income else 0
+
+    conn.close()
+
+    # ---------------------------
+    # ENRICHED DATA
+    # ---------------------------
+    spending_targets = get_spending_targets_with_progress()
+    saving_goals = get_saving_goals()
+
+    return {
+        "summary": summary,
+        "income_summary": income_summary,
+        "spending_targets": spending_targets,
+        "saving_goals": saving_goals,
+        "date_range": {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+    }

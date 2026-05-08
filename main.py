@@ -36,6 +36,35 @@ def fetch_transactions(start_date: str = None):
     end_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     return fetch_in_range(start, end_date)
 
+
+def extract_account_info(txn):
+    account = txn.get("account")
+
+    if isinstance(account, dict):
+        account_id = (
+            account.get("id")
+            or account.get("_id")
+            or txn.get("_account")
+            or txn.get("account_id")
+        )
+        account_name = (
+            account.get("name")
+            or account.get("formatted_name")
+            or account.get("label")
+            or ""
+        )
+    else:
+        account_id = (
+            txn.get("_account")
+            or txn.get("account_id")
+            or txn.get("account")
+            or ""
+        )
+        account_name = txn.get("account_name") or ""
+
+    return account_id or "", account_name or ""
+
+
 def fetch_in_range(start_date, end_date):
     url = "https://api.akahu.io/v1/transactions"
 
@@ -68,7 +97,33 @@ def fetch_in_range(start_date, end_date):
         for txn in items:
             if txn.get("pending"):
                 continue
-            all_transactions.append(txn)
+
+            # ---------------------------
+            # FLATTEN HERE (IMPORTANT FIX)
+            # ---------------------------
+
+            account_id, account_name = extract_account_info(txn)
+
+            flat = {
+                "id": txn.get("id"),
+                "date": txn.get("date"),
+                "amount": txn.get("amount"),
+                "description": txn.get("description", ""),
+                "_account": account_id,
+                "account_name": account_name,
+                "balance": txn.get("balance"),
+            }
+
+            # FIX CATEGORY (THIS WAS YOUR CRASH)
+            category = txn.get("category", "")
+
+            if isinstance(category, dict):
+                # Akahu format varies: name OR code
+                category = category.get("name") or category.get("code") or ""
+
+            flat["category"] = category
+
+            all_transactions.append(flat)
 
         print(f"Fetched {len(items)} txns (total {len(all_transactions)})")
 
@@ -78,12 +133,11 @@ def fetch_in_range(start_date, end_date):
 
     return all_transactions
 
-
 def format_row(transaction):
     raw_date = transaction.get("date")
     description = transaction.get("description")
     amount = transaction.get("amount")
-    txn_id = transaction.get("_id")
+    txn_id = transaction.get("id")
 
     # Convert date → DD/MM/YYYY
     date_obj = datetime.fromisoformat(raw_date.replace("Z", ""))
@@ -118,7 +172,7 @@ def push_transactions(sheet, transactions):
     rows = []
 
     for txn in transactions:
-        txn_id = txn.get("_id")
+        txn_id = txn.get("id")
 
         if txn_id in existing_ids:
             continue  # skip duplicate

@@ -9,7 +9,6 @@ const SORT_OPTIONS = [
 export default function SortDropdown({
   value,
   onChange,
-  options,
 }) {
   const [open, setOpen] = useState(false);
 

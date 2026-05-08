@@ -1,92 +1,114 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 
 import {
   getSpendingTargets,
-  getSpendingTargetProgress,
   createSpendingTarget,
+  updateSpendingTarget,
 } from "@/api/goals";
 
-export default function useSpendingTargets(budgetId) {
+const today = () => new Date().toISOString().slice(0, 10);
+const blankForm = () => ({
+  name: "",
+  amount: "",
+  period: "monthly",
+  start_date: today(),
+  categories: [],
+});
+
+export default function useSpendingTargets() {
   const [targets, setTargets] = useState([]);
-  const [progress, setProgress] = useState({});
   const [loading, setLoading] = useState(false);
 
-  const [form, setForm] = useState({
-    name: "",
-    amount: "",
-    period: "monthly",
-    categories: [],
-  });
+  const [form, setForm] = useState(blankForm);
 
-  async function loadTargets() {
-    if (!budgetId) return;
+  const requestIdRef = useRef(0);
+
+  const loadTargets = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
 
     try {
       setLoading(true);
 
-      const data = await getSpendingTargets(budgetId);
+      const data = await getSpendingTargets();
+
+      if (requestId !== requestIdRef.current) return;
 
       setTargets(data || []);
-
-      const progressEntries = await Promise.all(
-        (data || [])
-          .filter((t) => t && (t.id || t._id)) // 👈 important guard
-          .map(async (target) => {
-            const id = target.id || target._id;
-
-            const p = await getSpendingTargetProgress(
-              budgetId,
-              id
-            );
-
-            return [id, p];
-          })
-      );
-
-      const progressMap = Object.fromEntries(progressEntries);
-
-      setProgress(progressMap);
     } catch (err) {
-      console.error("Failed loading targets:", err);
+      console.error("Failed loading spending targets:", err);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadTargets();
-  }, [budgetId]);
+    const timeoutId = window.setTimeout(() => {
+      loadTargets();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loadTargets]);
 
   async function handleSubmit(e) {
     e.preventDefault();
 
     try {
-      await createSpendingTarget(budgetId, {
+      setLoading(true);
+
+      await createSpendingTarget({
         name: form.name,
         amount: Number(form.amount),
         period: form.period,
+        start_date: form.start_date,
         categories: form.categories,
       });
 
-      setForm({
-        name: "",
-        amount: "",
-        period: "monthly",
-        categories: [],
+      setForm(blankForm());
+
+      // 🔥 IMPORTANT: re-sync from backend (keeps enrichment correct)
+      await loadTargets();
+    } catch (err) {
+      console.error("Failed creating spending target:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUpdate(id) {
+    try {
+      setLoading(true);
+
+      await updateSpendingTarget(id, {
+        name: form.name,
+        amount: Number(form.amount),
+        period: form.period,
+        start_date: form.start_date,
+        categories: form.categories,
       });
 
-      loadTargets();
+      setForm(blankForm());
+      await loadTargets();
     } catch (err) {
-      console.error(err);
+      console.error("Failed updating spending target:", err);
+    } finally {
+      setLoading(false);
     }
   }
 
   return {
     targets,
-    progress,
     form,
     setForm,
     handleSubmit,
+    handleUpdate,
+    resetForm: () => setForm(blankForm()),
     reloadTargets: loadTargets,
     loading,
   };

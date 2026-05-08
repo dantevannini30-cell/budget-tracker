@@ -1,92 +1,65 @@
 import { API } from "@/shared/api/client";
 
-// ─── Spending Targets ─────────────────────────────────────
-
-export async function getSpendingTargets(budgetId) {
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/spending-targets`
-  );
-
-  if (!res.ok) {
-    throw new Error("Failed to load spending targets");
-  }
-
+async function handleResponse(res, msg) {
+  if (!res.ok) throw new Error(await res.text() || msg);
   return res.json();
 }
 
-export async function createSpendingTarget(budgetId, payload) {
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/spending-targets`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
+// ─── Spending Targets ─────────────────────────────
 
-  if (!res.ok) {
-    throw new Error("Failed to create spending target");
-  }
-
-  return res.json();
+export async function getSpendingTargets() {
+  const res = await fetch(`${API}/api/spending-targets`);
+  return handleResponse(res, "Failed to load spending targets");
 }
 
-export async function getSpendingTargetProgress(budgetId, targetId) {
-  if (!targetId) {
-    console.warn("Missing targetId in getSpendingTargetProgress");
-    return null;
-  }
+export async function createSpendingTarget(payload) {
+  const res = await fetch(`${API}/api/spending-targets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/spending-targets/${targetId}/progress`
-  );
-
-  if (!res.ok) {
-    throw new Error("Failed to load spending progress");
-  }
-
-  return res.json();
+  return handleResponse(res, "Failed to create spending target");
 }
 
-// ─── Saving Goals ─────────────────────────────────────────
+export async function updateSpendingTarget(id, payload) {
+  const res = await fetch(`${API}/api/spending-targets/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-export async function getSavingGoals(budgetId) {
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/saving-goals`
-  );
-
-  if (!res.ok) {
-    throw new Error("Failed to load saving goals");
-  }
-
-  return res.json();
+  return handleResponse(res, "Failed to update spending target");
 }
 
-export async function createSavingGoal(budgetId, payload) {
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/saving-goals`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
+// ─── Saving Goals ────────────────────────────────
 
-  if (!res.ok) {
-    throw new Error("Failed to create saving goal");
-  }
-
-  return res.json();
+export async function getAccounts() {
+  const res = await fetch(`${API}/api/accounts`);
+  return handleResponse(res, "Failed to load accounts");
 }
 
-export async function getSavingGoalProgress(budgetId, goalId) {
-  const res = await fetch(
-    `${API}/api/budgets/${budgetId}/saving-goals/${goalId}/progress`
-  );
+export async function getSavingGoals() {
+  const res = await fetch(`${API}/api/saving-goals`);
+  return handleResponse(res, "Failed to load saving goals");
+}
 
-  if (!res.ok) {
-    throw new Error("Failed to load saving goal progress");
-  }
+export async function createSavingGoal(payload) {
+  const res = await fetch(`${API}/api/saving-goals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-  return res.json();
+  return handleResponse(res, "Failed to create saving goal");
+}
+
+export async function updateSavingGoal(id, payload) {
+  const res = await fetch(`${API}/api/saving-goals/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  return handleResponse(res, "Failed to update saving goal");
 }

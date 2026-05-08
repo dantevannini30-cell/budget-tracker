@@ -1,89 +1,128 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 
 import {
+  getAccounts,
   getSavingGoals,
-  getSavingGoalProgress,
   createSavingGoal,
+  updateSavingGoal,
 } from "@/api/goals";
 
-export default function useSavingGoals(budgetId) {
+const today = () => new Date().toISOString().slice(0, 10);
+const blankForm = () => ({
+  name: "",
+  target_amount: "",
+  current_amount: "",
+  start_date: today(),
+  account_id: "",
+});
+
+export default function useSavingGoals() {
   const [goals, setGoals] = useState([]);
-  const [progress, setProgress] = useState({});
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [form, setForm] = useState({
-    name: "",
-    target_amount: "",
-    current_amount: "",
-  });
+  const [form, setForm] = useState(blankForm);
 
-  async function loadGoals() {
-    if (!budgetId) return;
+  const requestIdRef = useRef(0);
+
+  const loadGoals = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
 
     try {
       setLoading(true);
 
-      const data = await getSavingGoals(budgetId);
+      const data = await getSavingGoals();
+
+      if (requestId !== requestIdRef.current) return;
 
       setGoals(data || []);
-
-      const progressEntries = await Promise.all(
-        (data || [])
-          .filter((g) => g && (g.id || g._id))
-          .map(async (goal) => {
-            const id = goal.id || goal._id;
-
-            const p = await getSavingGoalProgress(
-              budgetId,
-              id
-            );
-
-            return [id, p];
-          })
-      );
-
-      const progressMap = Object.fromEntries(progressEntries);
-
-      setProgress(progressMap);
     } catch (err) {
-      console.error("Failed loading goals:", err);
+      console.error("Failed loading saving goals:", err);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }
+  }, []);
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const data = await getAccounts();
+      setAccounts(data || []);
+    } catch (err) {
+      console.error("Failed loading accounts:", err);
+      setAccounts([]);
+    }
+  }, []);
 
   useEffect(() => {
-    loadGoals();
-  }, [budgetId]);
+    const timeoutId = window.setTimeout(() => {
+      loadGoals();
+      loadAccounts();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loadAccounts, loadGoals]);
 
   async function handleSubmit(e) {
     e.preventDefault();
 
     try {
-      await createSavingGoal(budgetId, {
+      setLoading(true);
+
+      await createSavingGoal({
         name: form.name,
         target_amount: Number(form.target_amount),
         current_amount: Number(form.current_amount || 0),
+        start_date: form.start_date,
+        account_id: form.account_id || null,
       });
 
-      setForm({
-        name: "",
-        target_amount: "",
-        current_amount: "",
-      });
+      setForm(blankForm());
 
-      loadGoals();
+      // 🔥 CRITICAL FIX: re-fetch from backend instead of appending
+      await loadGoals();
     } catch (err) {
-      console.error(err);
+      console.error("Failed creating saving goal:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUpdate(id) {
+    try {
+      setLoading(true);
+
+      await updateSavingGoal(id, {
+        name: form.name,
+        target_amount: Number(form.target_amount),
+        current_amount: Number(form.current_amount || 0),
+        start_date: form.start_date,
+        account_id: form.account_id || null,
+      });
+
+      setForm(blankForm());
+      await loadGoals();
+    } catch (err) {
+      console.error("Failed updating saving goal:", err);
+    } finally {
+      setLoading(false);
     }
   }
 
   return {
     goals,
-    progress,
+    accounts,
     form,
     setForm,
     handleSubmit,
+    handleUpdate,
+    resetForm: () => setForm(blankForm()),
     reloadGoals: loadGoals,
     loading,
   };
