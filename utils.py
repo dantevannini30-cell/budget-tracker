@@ -1,5 +1,4 @@
 import sqlite3
-from classifier import classify_transaction
 from database import get_current_period_start
 DB_FILE = "transactions.db"
 
@@ -28,7 +27,7 @@ def clean_transactions(transactions):
             "date": txn["date"],
             "amount": txn["amount"],
             "description": "",
-            "category": classify_transaction(txn),
+            "category": "",
             "statement": txn.get("description", ""),
             "_account": txn.get("_account", ""),
             "account_name": txn.get("account_name", ""),

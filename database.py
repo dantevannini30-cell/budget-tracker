@@ -61,11 +61,22 @@ def init_db():
     )
 """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_classifications (
+            transaction_id TEXT PRIMARY KEY,
+            category TEXT,
+            source TEXT,
+            updated_at TEXT,
+            updated_by TEXT
+        )
+    """)
+
     ensure_column(cursor, "saving_goals", "start_date", "TEXT")
     ensure_column(cursor, "saving_goals", "account_id", "TEXT")
     ensure_column(cursor, "spending_targets", "start_date", "TEXT")
     ensure_column(cursor, "transactions", "account_name", "TEXT")
 
+    backfill_transaction_classifications(cursor)
     conn.commit()
     conn.close()
 
@@ -76,6 +87,54 @@ def ensure_column(cursor, table_name, column_name, column_type):
 
     if column_name not in columns:
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def now_iso():
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def backfill_transaction_classifications(cursor):
+    cursor.execute("""
+        INSERT OR IGNORE INTO transaction_classifications (
+            transaction_id, category, source, updated_at, updated_by
+        )
+        SELECT
+            id,
+            COALESCE(category, ''),
+            CASE
+                WHEN category IS NULL OR category = '' THEN 'unset'
+                ELSE 'legacy'
+            END,
+            ?,
+            NULL
+        FROM transactions
+    """, (now_iso(),))
+
+
+def upsert_transaction_classification(
+    cursor,
+    transaction_id,
+    category="",
+    source="unset",
+    updated_by=None,
+):
+    cursor.execute("""
+        INSERT INTO transaction_classifications (
+            transaction_id, category, source, updated_at, updated_by
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(transaction_id) DO UPDATE SET
+            category = excluded.category,
+            source = excluded.source,
+            updated_at = excluded.updated_at,
+            updated_by = excluded.updated_by
+    """, (
+        transaction_id,
+        category or "",
+        source,
+        now_iso(),
+        updated_by,
+    ))
 
 
 def ingest_transactions(transactions):
@@ -109,6 +168,13 @@ def ingest_transactions(transactions):
 
         if cursor.rowcount:
             inserted_ids.append(txn_id)
+            upsert_transaction_classification(
+                cursor,
+                txn_id,
+                txn.get("category", ""),
+                "classifier" if txn.get("category") else "unset",
+                "classifier" if txn.get("category") else None,
+            )
         else:
             cursor.execute("""
                 UPDATE transactions
@@ -184,15 +250,67 @@ def get_account_transactions(account_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT *
-        FROM transactions
-        WHERE account_id = ?
-        ORDER BY date DESC
+        SELECT
+            t.*,
+            COALESCE(NULLIF(c.category, ''), t.category, '') AS category,
+            COALESCE(c.source, 'unset') AS category_source,
+            c.updated_at AS category_updated_at,
+            c.updated_by AS category_updated_by
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.account_id = ?
+        ORDER BY t.date DESC
     """, (account_id,))
 
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
+
+
+def get_transactions():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            t.*,
+            COALESCE(NULLIF(c.category, ''), t.category, '') AS category,
+            COALESCE(c.source, 'unset') AS category_source,
+            c.updated_at AS category_updated_at,
+            c.updated_by AS category_updated_by
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
+        ORDER BY t.date DESC
+    """)
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def set_transaction_category(transaction_id, category, source="human", updated_by="user"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM transactions WHERE id = ?", (transaction_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return False
+
+    upsert_transaction_classification(
+        cursor,
+        transaction_id,
+        category,
+        source,
+        updated_by,
+    )
+
+    conn.commit()
+    conn.close()
+    return True
 
 
 def get_latest_account_transaction(cursor, account_id):
@@ -440,11 +558,13 @@ def get_spent_for_categories(cursor, categories, start_date):
 
     placeholders = ",".join(["?"] * len(categories))
     cursor.execute(f"""
-        SELECT COALESCE(SUM(ABS(amount)), 0) AS spent
-        FROM transactions
-        WHERE amount < 0
-        AND category IN ({placeholders})
-        AND date >= ?
+        SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
+        AND COALESCE(NULLIF(c.category, ''), t.category, '') IN ({placeholders})
+        AND t.date >= ?
     """, categories + [start_date])
 
     return cursor.fetchone()["spent"] or 0

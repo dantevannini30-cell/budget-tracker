@@ -12,6 +12,8 @@ from database import (
     get_latest_transaction_date,
     get_accounts,
     get_account_transactions,
+    get_transactions as get_transactions_from_db,
+    set_transaction_category,
     create_spending_target,
     update_spending_target,
     get_spending_targets_with_progress,
@@ -124,20 +126,7 @@ def refresh_transactions():
 
 @app.get("/api/transactions")
 def get_transactions():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT *
-        FROM transactions
-        WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
-        ORDER BY date DESC
-    """)
-
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-
-    return rows
+    return get_transactions_from_db()
 
 
 @app.get("/api/accounts")
@@ -158,32 +147,33 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
     updates = []
     params = []
 
-    if update.category is not None:
-        updates.append("category = ?")
-        params.append(update.category)
-
     if update.description is not None:
         updates.append("description = ?")
         params.append(update.description)
 
-    if not updates:
+    if update.category is None and not updates:
         raise HTTPException(400, "No update provided")
 
-    query = f"""
-        UPDATE transactions
-        SET {', '.join(updates)}
-        WHERE id = ?
-    """
+    if updates:
+        query = f"""
+            UPDATE transactions
+            SET {', '.join(updates)}
+            WHERE id = ?
+        """
 
-    params.append(transaction_id)
+        params.append(transaction_id)
 
-    cursor.execute(query, params)
+        cursor.execute(query, params)
 
-    if cursor.rowcount == 0:
-        raise HTTPException(404, "Transaction not found")
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "Transaction not found")
 
-    conn.commit()
+        conn.commit()
     conn.close()
+
+    if update.category is not None:
+        if not set_transaction_category(transaction_id, update.category, "human", "user"):
+            raise HTTPException(404, "Transaction not found")
 
     return {"message": "updated"}
 
@@ -200,11 +190,13 @@ def by_category():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(ABS(t.amount)) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
+        GROUP BY 1
         ORDER BY total DESC
     """)
 
@@ -226,11 +218,13 @@ def by_category_income():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount > 0
-        GROUP BY category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(ABS(t.amount)) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount > 0
+        GROUP BY 1
         ORDER BY total DESC
     """)
 
@@ -332,23 +326,25 @@ def summary(start_date: str = None, end_date: str = None):
 
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(ABS(t.amount)) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
     """
 
     params = []
 
     if start_date:
-        query += " AND date >= ?"
+        query += " AND t.date >= ?"
         params.append(start_date)
 
     if end_date:
-        query += " AND date <= ?"
+        query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY category ORDER BY total DESC"
+    query += " GROUP BY 1 ORDER BY total DESC"
 
     cursor.execute(query, params)
     rows = [dict(r) for r in cursor.fetchall()]
@@ -376,23 +372,25 @@ def dashboard(
     # ---------------------------
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(ABS(t.amount)) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
     """
 
     params = []
 
     if start_date:
-        query += " AND date >= ?"
+        query += " AND t.date >= ?"
         params.append(start_date)
 
     if end_date:
-        query += " AND date <= ?"
+        query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY category ORDER BY total DESC"
+    query += " GROUP BY 1 ORDER BY total DESC"
 
     cursor.execute(query, params)
     summary = [dict(r) for r in cursor.fetchall()]
@@ -407,11 +405,13 @@ def dashboard(
     # ---------------------------
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount > 0
-        GROUP BY category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(ABS(t.amount)) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount > 0
+        GROUP BY 1
         ORDER BY total DESC
     """)
 
