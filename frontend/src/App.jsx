@@ -1,11 +1,7 @@
 import { useState } from "react";
 
-import SummaryStats from "@/features/SummaryStats";
-import CategoryBars from "@/features/CategoryBars";
-import RecentActivity from "@/features/RecentActivity";
+import Dashboard from "@/features/Dashboard";
 import TransactionsTab from "@/features/TransactionsTab";
-import BudgetsTab from "@/features/BudgetsTab";
-import BudgetDashboard from "@/features/BudgetDashboard";
 
 /*
 KEEP TEMPORARILY:
@@ -74,20 +70,7 @@ document.head.appendChild(globalStyle);
 
 
 export default function App() {
-  const [tab, setTab] =
-    useState("dashboard");
-
-  // KEEP HERE PER REQUIREMENT
-  const [selectedBudgetId, setSelectedBudgetId] =
-    useState(null);
-
-  const handleSelectBudget = (id) => {
-    setSelectedBudgetId(id);
-    setTab("dashboard");
-  };
-
-  const clearSelectedBudget = () =>
-    setSelectedBudgetId(null);
+  const [tab, setTab] = useState("dashboard");
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -95,7 +78,7 @@ export default function App() {
       <header style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 24, letterSpacing: "0.1em", color: "var(--accent)" }}>BUDGET</div>
         <nav style={{ display: "flex" }}>
-          {["dashboard","transactions","budgets"].map(t => (
+          {["dashboard", "transactions"].map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: "none", border: "none", cursor: "pointer", padding: "0 16px", height: 52,
               fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em",
@@ -117,109 +100,8 @@ export default function App() {
           margin: "0 auto",
         }}
       >
-        {tab === "dashboard" && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 20,
-            }}
-          >
-            {selectedBudgetId ? (
-              <BudgetDashboard
-                budgetId={selectedBudgetId}
-                onClearBudget={
-                  clearSelectedBudget
-                }
-              />
-            ) : (
-              <>
-                <SummaryStats />
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns:
-                      "1fr 1fr",
-                    gap: 16,
-                  }}
-                >
-                  <div
-                    style={{
-                      background:
-                        "var(--surface)",
-                      border:
-                        "1px solid var(--border)",
-                      borderRadius: 2,
-                      padding: 24,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontFamily:
-                          "var(--font-mono)",
-                        fontSize: 10,
-                        textTransform:
-                          "uppercase",
-                        letterSpacing:
-                          "0.12em",
-                        color:
-                          "var(--muted2)",
-                        marginBottom: 20,
-                      }}
-                    >
-                      Spending by Category
-                    </div>
-
-                    <CategoryBars />
-                  </div>
-
-                  <div
-                    style={{
-                      background:
-                        "var(--surface)",
-                      border:
-                        "1px solid var(--border)",
-                      borderRadius: 2,
-                      padding: 24,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontFamily:
-                          "var(--font-mono)",
-                        fontSize: 10,
-                        textTransform:
-                          "uppercase",
-                        letterSpacing:
-                          "0.12em",
-                        color:
-                          "var(--muted2)",
-                        marginBottom: 20,
-                      }}
-                    >
-                      Recent Activity
-                    </div>
-
-                    <RecentActivity />
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {tab === "transactions" && (
-          <TransactionsTab />
-        )}
-
-        {tab === "budgets" && (
-          <BudgetsTab
-            onSelectBudget={
-              handleSelectBudget
-            }
-          />
-        )}
+        {tab === "dashboard" && <Dashboard />}
+        {tab === "transactions" && <TransactionsTab />}
       </main>
     </div>
   );
