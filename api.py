@@ -4,14 +4,15 @@ from pydantic import BaseModel
 import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
-
+from main import fetch_in_range
+from utils import clean_transactions
 from database import (
     init_db,
     ingest_transactions,
     create_spending_target,
     get_spending_targets,
     create_saving_goal,
-    get_saving_goals,
+    get_saving_goal,
 )
 
 from utils import (
@@ -22,6 +23,7 @@ from utils import (
 # ---------------------------
 # INIT
 # ---------------------------
+
 init_db()
 
 app = FastAPI()
@@ -45,6 +47,7 @@ def get_connection():
 # ---------------------------
 # MODELS
 # ---------------------------
+
 class TransactionUpdate(BaseModel):
     category: str | None = None
     description: str | None = None
@@ -62,10 +65,12 @@ class SavingGoalCreate(BaseModel):
     target_amount: float
     current_amount: float | None = None
 
-
+class LoadTransactionsRequest(BaseModel):
+    start_date: str
 # ---------------------------
 # HEALTH CHECK
 # ---------------------------
+
 @app.get("/api/hello")
 def hello():
     return {
@@ -77,21 +82,50 @@ def hello():
 # ---------------------------
 # TRANSACTIONS
 # ---------------------------
+@app.post("/api/transactions/load")
+def load_transactions(req: LoadTransactionsRequest):
+    """
+    Fetch → clean → store → return inserted transactions
+    """
+
+    # 1. fetch transactions
+    transactions = fetch_in_range(
+        req.start_date,
+        req.end_date if hasattr(req, "end_date") else None
+    )
+
+    # 2. clean them
+    cleaned = clean_transactions(transactions)
+
+    # 3. store in DB
+    ingest_transactions(cleaned)
+
+    # 4. RETURN ACTUAL DATA (this is the fix)
+    return cleaned
+
+
 @app.get("/api/transactions")
 def get_transactions():
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, date, amount, description, category, statement, account_id
+        SELECT
+            id,
+            date,
+            amount,
+            description,
+            category,
+            statement,
+            account_id
         FROM transactions
         WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
         ORDER BY date DESC
-        LIMIT 50
     """)
 
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
+
     return rows
 
 
@@ -121,10 +155,12 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
     """
 
     params.append(transaction_id)
+
     cursor.execute(query, params)
 
     if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Not found")
+        conn.close()
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
     conn.commit()
     conn.close()
@@ -135,8 +171,12 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
 # ---------------------------
 # SUMMARY
 # ---------------------------
+
 @app.get("/api/summary")
-def summary(start_date: str | None = None, end_date: str | None = None):
+def summary(
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -148,21 +188,27 @@ def summary(start_date: str | None = None, end_date: str | None = None):
         FROM transactions
         WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
     """
-    
+
     params = []
-    
+
     if start_date:
         query += " AND date >= ?"
         params.append(start_date)
-    
+
     if end_date:
         query += " AND date < ?"
-        # Add 1 day to end_date to include the entire day
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+
+        end_dt = (
+            datetime.strptime(end_date, "%Y-%m-%d")
+            + timedelta(days=1)
+        )
+
         params.append(end_dt.strftime("%Y-%m-%d"))
-    
+
     cursor.execute(query, params)
+
     row = cursor.fetchone()
+
     conn.close()
 
     return {
@@ -173,177 +219,134 @@ def summary(start_date: str | None = None, end_date: str | None = None):
 
 
 # ---------------------------
-# CATEGORY BREAKDOWN
+# SPENDING BY CATEGORY
 # ---------------------------
+
 @app.get("/api/summary/by-category")
-def by_category(start_date: str | None = None, end_date: str | None = None):
+def by_category(
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') as category,
-            SUM(ABS(amount)) as total
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
         FROM transactions
         WHERE amount < 0
     """
-    
+
     params = []
-    
+
     if start_date:
         query += " AND date >= ?"
         params.append(start_date)
-    
+
     if end_date:
         query += " AND date < ?"
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+
+        end_dt = (
+            datetime.strptime(end_date, "%Y-%m-%d")
+            + timedelta(days=1)
+        )
+
         params.append(end_dt.strftime("%Y-%m-%d"))
-    
-    query += " GROUP BY category ORDER BY total DESC"
-    
+
+    query += """
+        GROUP BY category
+        ORDER BY total DESC
+    """
+
     cursor.execute(query, params)
+
     rows = [dict(r) for r in cursor.fetchall()]
+
     conn.close()
 
     total = sum(r["total"] for r in rows)
 
     for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
+        r["pct"] = (
+            round((r["total"] / total) * 100, 1)
+            if total
+            else 0
+        )
 
     return rows
 
 
+# ---------------------------
+# INCOME BY CATEGORY
+# ---------------------------
+
 @app.get("/api/summary/by-category/income")
-def by_category_income(start_date: str | None = None, end_date: str | None = None):
+def by_category_income(
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') as category,
-            SUM(ABS(amount)) as total
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
         FROM transactions
         WHERE amount > 0
     """
-    
+
     params = []
-    
+
     if start_date:
         query += " AND date >= ?"
         params.append(start_date)
-    
+
     if end_date:
         query += " AND date < ?"
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+
+        end_dt = (
+            datetime.strptime(end_date, "%Y-%m-%d")
+            + timedelta(days=1)
+        )
+
         params.append(end_dt.strftime("%Y-%m-%d"))
-    
-    query += " GROUP BY category ORDER BY total DESC"
-    
+
+    query += """
+        GROUP BY category
+        ORDER BY total DESC
+    """
+
     cursor.execute(query, params)
+
     rows = [dict(r) for r in cursor.fetchall()]
+
     conn.close()
 
     total = sum(r["total"] for r in rows)
 
     for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
+        r["pct"] = (
+            round((r["total"] / total) * 100, 1)
+            if total
+            else 0
+        )
 
     return rows
 
 
-# ---------------------------
-# BUDGETS
-# ---------------------------
-@app.get("/api/budgets")
-def get_budgets():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, start_date, created_at, transaction_count, balances
-        FROM budgets
-        ORDER BY created_at DESC
-    """)
-
-    rows = []
-    for r in cursor.fetchall():
-        row = dict(r)
-        row["balances"] = json.loads(row["balances"]) if row["balances"] else {}
-        rows.append(row)
-
-    conn.close()
-    return rows
-
-
-@app.post("/api/budgets")
-def create_budget_endpoint(budget: BudgetCreate):
-    datetime.strptime(budget.start_date, "%Y-%m-%d")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id
-        FROM transactions
-        WHERE date >= ?
-          AND LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
-    """, (budget.start_date,))
-
-    txn_ids = [r[0] for r in cursor.fetchall()]
-    conn.close()
-
-    return create_budget(budget.start_date, txn_ids)
-
-
-@app.get("/api/budgets/{budget_id}/summary")
-def budget_summary(budget_id: str):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM budgets WHERE id = ?", (budget_id,))
-    budget = cursor.fetchone()
-
-    if not budget:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    budget = dict(budget)
-    budget["balances"] = json.loads(budget["balances"]) if budget["balances"] else {}
-
-    cursor.execute("""
-        SELECT amount, date
-        FROM transactions t
-        JOIN budget_transactions bt ON bt.transaction_id = t.id
-        WHERE bt.budget_id = ?
-    """, (budget_id,))
-
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-
-    total_in = sum(r["amount"] for r in rows if r["amount"] > 0)
-    total_out = sum(abs(r["amount"]) for r in rows if r["amount"] < 0)
-
-    return {
-        **budget,
-        "summary": {
-            "total_in": total_in,
-            "total_out": total_out,
-            "net": total_in - total_out,
-        },
-    }
-
-
-# ---------------------------
+# =========================
 # SPENDING TARGETS
-# ---------------------------
+# =========================
+
 @app.get("/api/spending-targets")
-def list_global_targets():
-    """Get all spending targets (global, not budget-specific)"""
+def list_targets():
     return get_spending_targets(None)
 
 
 @app.post("/api/spending-targets")
-def add_global_target(target: SpendingTargetCreate):
-    """Create a global spending target"""
+def create_target(target: SpendingTargetCreate):
     return create_spending_target(
         None,
         target.name,
@@ -354,44 +357,26 @@ def add_global_target(target: SpendingTargetCreate):
 
 
 @app.get("/api/spending-targets/{target_id}/progress")
-def global_target_progress(target_id: str):
-    """Get progress for a global spending target"""
-    return calculate_spending_target_progress(None, target_id)
+def target_progress(target_id: str):
+    if not target_id:
+        raise HTTPException(400, "Missing target_id")
 
-
-@app.post("/api/budgets/{budget_id}/spending-targets")
-def add_target(budget_id: str, target: SpendingTargetCreate):
-    return create_spending_target(
-        budget_id,
-        target.name,
-        target.amount,
-        target.period,
-        target.categories,
+    return calculate_spending_target_progress(
+        target_id,
     )
 
 
-@app.get("/api/budgets/{budget_id}/spending-targets")
-def list_targets(budget_id: str):
-    return get_spending_targets(budget_id)
-
-
-@app.get("/api/budgets/{budget_id}/spending-targets/{target_id}/progress")
-def target_progress(budget_id: str, target_id: str):
-    return calculate_spending_target_progress(budget_id, target_id)
-
-
-# ---------------------------
+# =========================
 # SAVING GOALS
-# ---------------------------
+# =========================
+
 @app.get("/api/saving-goals")
-def list_global_goals():
-    """Get all saving goals (global, not budget-specific)"""
-    return get_saving_goals(None)
+def list_goals():
+    return get_saving_goal(None)
 
 
 @app.post("/api/saving-goals")
-def add_global_goal(goal: SavingGoalCreate):
-    """Create a global saving goal"""
+def create_goal(goal: SavingGoalCreate):
     return create_saving_goal(
         None,
         goal.name,
@@ -402,24 +387,11 @@ def add_global_goal(goal: SavingGoalCreate):
 
 
 @app.get("/api/saving-goals/{goal_id}/progress")
-def global_goal_progress(goal_id: str):
-    """Get progress for a global saving goal"""
-    return calculate_saving_goal_progress(None, goal_id)
+def goal_progress(goal_id: str):
+    if not goal_id:
+        raise HTTPException(400, "Missing goal_id")
 
-
-@app.post("/api/saving-goals")
-def add_global_goal(goal: SavingGoalCreate):
-    """Create a global saving goal"""
-    return create_saving_goal(
+    return calculate_saving_goal_progress(
         None,
-        goal.name,
-        goal.target_amount,
-        None,
-        goal.current_amount,
+        goal_id,
     )
-
-
-@app.get("/api/saving-goals/{goal_id}/progress")
-def global_goal_progress(goal_id: str):
-    """Get progress for a global saving goal"""
-    return calculate_saving_goal_progress(None, goal_id)

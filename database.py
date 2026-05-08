@@ -6,12 +6,18 @@ from datetime import datetime
 DB_FILE = "transactions.db"
 
 
+# ─────────────────────────────
+# CONNECTION
+# ─────────────────────────────
 def get_connection():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+# ─────────────────────────────
+# INIT DB
+# ─────────────────────────────
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -41,7 +47,7 @@ def init_db():
     )
     """)
 
-    # Link table
+    # Budget ↔ Transactions
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS budget_transactions (
         budget_id TEXT,
@@ -50,7 +56,7 @@ def init_db():
     )
     """)
 
-    # Spending targets
+    # Spending Targets
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS spending_targets (
         id TEXT PRIMARY KEY,
@@ -61,6 +67,7 @@ def init_db():
     )
     """)
 
+    # Spending Target Categories
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS spending_target_categories (
         target_id TEXT,
@@ -69,7 +76,7 @@ def init_db():
     )
     """)
 
-    # Saving goals
+    # Saving Goals
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS saving_goals (
         id TEXT PRIMARY KEY,
@@ -98,7 +105,13 @@ def create_budget(start_date, transaction_ids):
     balances = {}
 
     cursor.execute("""
-        INSERT INTO budgets (id, start_date, created_at, transaction_count, balances)
+        INSERT INTO budgets (
+            id,
+            start_date,
+            created_at,
+            transaction_count,
+            balances
+        )
         VALUES (?, ?, ?, ?, ?)
     """, (
         budget_id,
@@ -110,7 +123,10 @@ def create_budget(start_date, transaction_ids):
 
     for txn_id in transaction_ids:
         cursor.execute("""
-            INSERT OR IGNORE INTO budget_transactions (budget_id, transaction_id)
+            INSERT OR IGNORE INTO budget_transactions (
+                budget_id,
+                transaction_id
+            )
             VALUES (?, ?)
         """, (budget_id, txn_id))
 
@@ -127,7 +143,7 @@ def create_budget(start_date, transaction_ids):
 
 
 # ─────────────────────────────
-# INGEST
+# INGEST TRANSACTIONS
 # ─────────────────────────────
 def ingest_transactions(transactions):
     conn = get_connection()
@@ -135,8 +151,16 @@ def ingest_transactions(transactions):
 
     for txn in transactions:
         cursor.execute("""
-        INSERT OR IGNORE INTO transactions
-        (id, date, amount, description, category, statement, account_id, balance)
+        INSERT OR IGNORE INTO transactions (
+            id,
+            date,
+            amount,
+            description,
+            category,
+            statement,
+            account_id,
+            balance
+        )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             txn["_id"],
@@ -156,22 +180,46 @@ def ingest_transactions(transactions):
 # ─────────────────────────────
 # SPENDING TARGETS
 # ─────────────────────────────
-def create_spending_target(budget_id, name, amount, period, categories):
+def create_spending_target(
+    budget_id,
+    name,
+    amount,
+    period,
+    categories
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     target_id = uuid.uuid4().hex
 
     cursor.execute("""
-        INSERT INTO spending_targets (id, budget_id, name, amount, period)
+        INSERT INTO spending_targets (
+            id,
+            budget_id,
+            name,
+            amount,
+            period
+        )
         VALUES (?, ?, ?, ?, ?)
-    """, (target_id, budget_id, name, amount, period))
+    """, (
+        target_id,
+        budget_id,
+        name,
+        amount,
+        period
+    ))
 
-    for c in categories:
+    for category in categories:
         cursor.execute("""
-            INSERT OR IGNORE INTO spending_target_categories (target_id, category)
+            INSERT OR IGNORE INTO spending_target_categories (
+                target_id,
+                category
+            )
             VALUES (?, ?)
-        """, (target_id, c))
+        """, (
+            target_id,
+            category
+        ))
 
     conn.commit()
     conn.close()
@@ -190,37 +238,108 @@ def get_spending_targets(budget_id):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM spending_targets WHERE budget_id = ?
-    """, (budget_id,))
-
-    targets = [dict(r) for r in cursor.fetchall()]
-
-    for t in targets:
+    if budget_id is None:
         cursor.execute("""
-            SELECT category FROM spending_target_categories
-            WHERE target_id = ?
-        """, (t["id"],))
+            SELECT *
+            FROM spending_targets
+        """)
+    else:
+        cursor.execute("""
+            SELECT *
+            FROM spending_targets
+            WHERE budget_id = ?
+        """, (budget_id,))
 
-        t["categories"] = [r[0] for r in cursor.fetchall()]
+    targets = []
+
+    for row in cursor.fetchall():
+        target = dict(row)
+
+        cursor.execute("""
+            SELECT category
+            FROM spending_target_categories
+            WHERE target_id = ?
+        """, (target["id"],))
+
+        target["categories"] = [
+            r["category"]
+            for r in cursor.fetchall()
+        ]
+
+        targets.append(target)
 
     conn.close()
+
     return targets
+
+
+def get_spending_target(target_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM spending_targets
+        WHERE id = ?
+    """, (target_id,))
+
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return None
+
+    target = dict(row)
+
+    cursor.execute("""
+        SELECT category
+        FROM spending_target_categories
+        WHERE target_id = ?
+    """, (target_id,))
+
+    target["categories"] = [
+        r["category"]
+        for r in cursor.fetchall()
+    ]
+
+    conn.close()
+
+    return target
 
 
 # ─────────────────────────────
 # SAVING GOALS
 # ─────────────────────────────
-def create_saving_goal(budget_id, name, target_amount, by_date, current_amount):
+def create_saving_goal(
+    budget_id,
+    name,
+    target_amount,
+    by_date,
+    current_amount
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     goal_id = uuid.uuid4().hex
 
     cursor.execute("""
-        INSERT INTO saving_goals (id, budget_id, name, target, by_date, start_balance)
+        INSERT INTO saving_goals (
+            id,
+            budget_id,
+            name,
+            target,
+            by_date,
+            start_balance
+        )
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (goal_id, budget_id, name, target_amount, by_date, current_amount))
+    """, (
+        goal_id,
+        budget_id,
+        name,
+        target_amount,
+        by_date,
+        current_amount or 0
+    ))
 
     conn.commit()
     conn.close()
@@ -231,25 +350,62 @@ def create_saving_goal(budget_id, name, target_amount, by_date, current_amount):
         "name": name,
         "target_amount": target_amount,
         "by_date": by_date,
-        "current_amount": current_amount
+        "current_amount": current_amount or 0
     }
 
 
-def get_saving_goals(budget_id):
+# def get_saving_goals(budget_id):
+#     conn = get_connection()
+#     cursor = conn.cursor()
+
+#     if budget_id is None:
+#         cursor.execute("""
+#             SELECT *
+#             FROM saving_goals
+#         """)
+#     else:
+#         cursor.execute("""
+#             SELECT *
+#             FROM saving_goals
+#             WHERE budget_id = ?
+#         """, (budget_id,))
+
+#     goals = []
+
+#     for row in cursor.fetchall():
+#         goal = dict(row)
+
+#         # Convert DB schema → frontend schema
+#         goal["target_amount"] = goal.pop("target")
+#         goal["current_amount"] = goal.pop("start_balance")
+
+#         goals.append(goal)
+
+#     conn.close()
+
+#     return goals
+
+
+def get_saving_goal(goal_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT * FROM saving_goals WHERE budget_id = ?
-    """, (budget_id,))
+        SELECT *
+        FROM saving_goals
+        WHERE id = ?
+    """, (goal_id,))
 
-    goals = []
-    for r in cursor.fetchall():
-        goal = dict(r)
-        # Map database fields to frontend field names
-        goal["target_amount"] = goal.pop("target")
-        goal["current_amount"] = goal.pop("start_balance")
-        goals.append(goal)
+    row = cursor.fetchone()
 
     conn.close()
-    return goals
+
+    if not row:
+        return None
+
+    goal = dict(row)
+
+    goal["target_amount"] = goal.pop("target")
+    goal["current_amount"] = goal.pop("start_balance")
+
+    return goal
