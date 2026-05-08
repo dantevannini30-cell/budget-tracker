@@ -15,7 +15,7 @@ export default function useSpendingTargets(budgetId) {
     name: "",
     amount: "",
     period: "monthly",
-    categories: "",
+    categories: [],
   });
 
   async function loadTargets() {
@@ -65,17 +65,14 @@ export default function useSpendingTargets(budgetId) {
         name: form.name,
         amount: Number(form.amount),
         period: form.period,
-        categories: form.categories
-          .split(",")
-          .map((c) => c.trim())
-          .filter(Boolean),
+        categories: form.categories,
       });
 
       setForm({
         name: "",
         amount: "",
         period: "monthly",
-        categories: "",
+        categories: [],
       });
 
       loadTargets();

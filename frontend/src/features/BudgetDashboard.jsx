@@ -264,6 +264,7 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
       >
         <SpendingTargetsSection
           budgetId={budgetId}
+          transactions={transactions}
         />
 
         <SavingGoalsSection

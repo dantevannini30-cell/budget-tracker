@@ -4,6 +4,8 @@ import useSpendingTargets from "./hooks/useSpendingTargets";
 
 import { buildSpendingTargetChartData } from "./utils/chartUtils";
 
+import CategoryDropdown from "@/components/CategoryDropdown";
+
 import {
   cardStyle,
   inputStyle,
@@ -12,6 +14,7 @@ import {
 
 export default function SpendingTargetsSection({
   budgetId,
+  transactions = [],
 }) {
   const {
     targets,
@@ -96,16 +99,16 @@ export default function SpendingTargetsSection({
           <option value="budget">Entire Budget</option>
         </select>
 
-        <input
-          placeholder="Categories (comma separated)"
-          value={form.categories}
-          onChange={(e) =>
+        <CategoryDropdown
+          transactions={transactions}
+          selectedCategories={form.categories}
+          onChange={(categories) =>
             setForm({
               ...form,
-              categories: e.target.value,
+              categories,
             })
           }
-          style={inputStyle}
+          placeholder="Select categories..."
         />
 
         <button type="submit" style={primaryBtn} disabled={loading}>
