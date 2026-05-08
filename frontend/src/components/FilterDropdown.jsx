@@ -1,19 +1,7 @@
 import { useState } from "react";
 
-export default function FilterDropdown({
-  filters,
-  onChange,
-}) {
-  const [open, setOpen] = useState(false);
-
-  const activeCount = [
-    !filters.showIn,
-    !filters.showOut,
-    !filters.showCategorised,
-    !filters.showUncategorised,
-  ].filter(Boolean).length;
-
-  const Item = ({ label, checked, onToggle }) => (
+function FilterItem({ label, checked, onToggle }) {
+  return (
     <div
       onClick={onToggle}
       style={{
@@ -80,6 +68,20 @@ export default function FilterDropdown({
       </span>
     </div>
   );
+}
+
+export default function FilterDropdown({
+  filters,
+  onChange,
+}) {
+  const [open, setOpen] = useState(false);
+
+  const activeCount = [
+    !filters.showIn,
+    !filters.showOut,
+    !filters.showCategorised,
+    !filters.showUncategorised,
+  ].filter(Boolean).length;
 
   return (
     <div style={{ position: "relative" }}>
@@ -106,12 +108,12 @@ export default function FilterDropdown({
             minWidth: 200, boxShadow: "0 8px 24px rgba(0,0,0,0.4)", overflow: "hidden",
           }}>
             <div style={{ padding: "8px 14px 4px", fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted)" }}>Direction</div>
-            <Item label="Money in" checked={filters.showIn} onToggle={() => onChange({ ...filters, showIn: !filters.showIn })} />
-            <Item label="Money out" checked={filters.showOut} onToggle={() => onChange({ ...filters, showOut: !filters.showOut })} />
+            <FilterItem label="Money in" checked={filters.showIn} onToggle={() => onChange({ ...filters, showIn: !filters.showIn })} />
+            <FilterItem label="Money out" checked={filters.showOut} onToggle={() => onChange({ ...filters, showOut: !filters.showOut })} />
             <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />
             <div style={{ padding: "8px 14px 4px", fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted)" }}>Category</div>
-            <Item label="Categorised" checked={filters.showCategorised} onToggle={() => onChange({ ...filters, showCategorised: !filters.showCategorised })} />
-            <Item label="Uncategorised" checked={filters.showUncategorised} onToggle={() => onChange({ ...filters, showUncategorised: !filters.showUncategorised })} />
+            <FilterItem label="Categorised" checked={filters.showCategorised} onToggle={() => onChange({ ...filters, showCategorised: !filters.showCategorised })} />
+            <FilterItem label="Uncategorised" checked={filters.showUncategorised} onToggle={() => onChange({ ...filters, showUncategorised: !filters.showUncategorised })} />
             {activeCount > 0 && (
               <>
                 <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />

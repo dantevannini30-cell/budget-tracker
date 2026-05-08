@@ -1,7 +1,5 @@
 import sqlite3
 import uuid
-import json
-from datetime import datetime
 
 DB_FILE = "transactions.db"
 
@@ -9,21 +7,6 @@ DB_FILE = "transactions.db"
 # ---------------------------
 # CONNECTION
 # ---------------------------
-
-def get_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-# ---------------------------
-# INIT
-# ---------------------------
-
-import sqlite3
-
-DB_FILE = "transactions.db"
-
 
 def get_connection():
     conn = sqlite3.connect(DB_FILE)
@@ -78,20 +61,14 @@ def init_db():
     conn.close()
 
 
-# ---------------------------
-# TRANSACTIONS
-# ---------------------------
-
-import uuid
-
 def ingest_transactions(transactions):
     conn = get_connection()
     cursor = conn.cursor()
+    inserted_ids = []
 
     for txn in transactions:
-        txn_id = txn.get("_id")
+        txn_id = txn.get("id")
 
-        # ❌ reject invalid upstream IDs
         if not txn_id:
             txn_id = uuid.uuid4().hex
 
@@ -112,8 +89,27 @@ def ingest_transactions(transactions):
             txn.get("balance", 0),
         ))
 
+        if cursor.rowcount:
+            inserted_ids.append(txn_id)
+
     conn.commit()
     conn.close()
+
+    return inserted_ids
+
+
+def get_latest_transaction_date():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT MAX(date) AS latest_date FROM transactions")
+    row = cursor.fetchone()
+
+    conn.close()
+
+    return row["latest_date"] if row else None
+
+
 # ---------------------------
 # SPENDING TARGETS
 # ---------------------------
@@ -145,6 +141,7 @@ def create_spending_target(name, amount, period, categories):
         "period": period,
         "categories": categories,
     }
+
 
 def get_spending_targets():
     conn = get_connection()
@@ -204,56 +201,47 @@ def get_saving_goals():
     return [dict(r) for r in rows]
 
 
-
-
 def get_spending_targets_with_progress():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 1. Get all targets
     cursor.execute("SELECT * FROM spending_targets")
-    targets = cursor.fetchall()
+    targets = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT target_id, category
+        FROM spending_target_categories
+    """)
+
+    category_map = {}
+    for row in cursor.fetchall():
+        category_map.setdefault(row["target_id"], []).append(row["category"])
+
+    cursor.execute("""
+        SELECT category, COALESCE(SUM(ABS(amount)), 0) AS spent
+        FROM transactions
+        WHERE amount < 0
+        GROUP BY category
+    """)
+
+    spending_map = {row["category"]: row["spent"] for row in cursor.fetchall()}
+
+    conn.close()
 
     result = []
 
-    for t in targets:
-        target = dict(t)
+    for target in targets:
+        categories = category_map.get(target["id"], [])
+        spent = sum(spending_map.get(category, 0) for category in categories)
+        amount = target["amount"]
 
-        # 2. Get categories for this target
-        cursor.execute("""
-            SELECT category
-            FROM spending_target_categories
-            WHERE target_id = ?
-        """, (target["id"],))
+        result.append({
+            **target,
+            "categories": categories,
+            "current_spent": spent,
+            "remaining": amount - spent,
+            "progress_pct": (spent / amount * 100) if amount else 0,
+            "is_over": spent > amount,
+        })
 
-        categories = [r["category"] for r in cursor.fetchall()]
-        target["categories"] = categories
-
-        # 3. Get actual spending for those categories
-        if categories:
-            placeholders = ",".join(["?"] * len(categories))
-
-            cursor.execute(f"""
-                SELECT COALESCE(SUM(amount), 0) as spent
-                FROM transactions
-                WHERE category IN ({placeholders})
-            """, categories)
-
-            spent = cursor.fetchone()["spent"]
-        else:
-            spent = 0
-
-        # 4. Compute metrics
-        target_amount = target["amount"]
-
-        target["current_spent"] = spent
-        target["remaining"] = target_amount - spent
-        target["progress_pct"] = (
-            (spent / target_amount) * 100 if target_amount else 0
-        )
-        target["is_over"] = spent > target_amount
-
-        result.append(target)
-
-    conn.close()
     return result

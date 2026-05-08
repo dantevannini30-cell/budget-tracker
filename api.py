@@ -1,16 +1,17 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from main import fetch_in_range
 from utils import clean_transactions
 from database import (
     init_db,
+    get_connection,
     ingest_transactions,
+    get_latest_transaction_date,
     create_spending_target,
-    get_spending_targets,
+    get_spending_targets_with_progress,
     create_saving_goal,
     get_saving_goals,
 )
@@ -35,17 +36,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_FILE = "transactions.db"
-
 @app.on_event("startup")
 def startup():
     init_db()
-
-
-def get_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 # ---------------------------
@@ -91,15 +84,35 @@ def hello():
 # TRANSACTIONS
 # ---------------------------
 
+def utc_now_for_akahu():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 @app.post("/api/transactions/load")
 def load_transactions(req: LoadTransactionsRequest):
 
-    transactions = fetch_in_range(req.start_date, req.end_date)
+    transactions = fetch_in_range(req.start_date, req.end_date or utc_now_for_akahu())
     cleaned = clean_transactions(transactions)
+    inserted_ids = set(ingest_transactions(cleaned))
 
-    ingest_transactions(cleaned)
+    return [txn for txn in cleaned if txn["id"] in inserted_ids]
 
-    return cleaned
+
+@app.post("/api/transactions/refresh")
+def refresh_transactions():
+    latest_date = get_latest_transaction_date()
+
+    if not latest_date:
+        raise HTTPException(400, "No existing transactions. Choose a start date first.")
+
+    transactions = fetch_in_range(latest_date, utc_now_for_akahu())
+    cleaned = clean_transactions(transactions)
+    inserted_ids = set(ingest_transactions(cleaned))
+
+    return {
+        "start_date": latest_date,
+        "transactions": [txn for txn in cleaned if txn["id"] in inserted_ids],
+    }
 
 
 @app.get("/api/transactions")
@@ -215,53 +228,9 @@ def by_category_income():
     return rows
 
 
-# ---------------------------
-# SPENDING TARGETS
-# ---------------------------
-
-from utils import calculate_spending_target_progress
-
-
 @app.get("/api/spending-targets")
 def list_targets():
-    targets = get_spending_targets()
-
-    # Precompute ALL spending once (important optimization)
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT category, SUM(ABS(amount)) as spent
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY category
-    """)
-
-    category_spend = {r["category"]: r["spent"] for r in cursor.fetchall()}
-
-    conn.close()
-
-    enriched = []
-
-    for t in targets:
-        categories = t.get("categories", [])
-
-        spent = sum(
-            category_spend.get(c, 0) for c in categories
-        )
-
-        amount = t["amount"]
-
-        enriched.append({
-            **t,
-            "current_spent": spent,
-            "remaining": amount - spent,
-            "progress_pct": (spent / amount * 100) if amount else 0,
-            "is_over": spent > amount
-        })
-
-    return enriched
-
+    return get_spending_targets_with_progress()
 
 
 @app.post("/api/spending-targets")
@@ -338,11 +307,6 @@ def summary(start_date: str = None, end_date: str = None):
         r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
 
     return rows
-
-
-from fastapi import Query
-from datetime import datetime
-from database import get_connection, get_spending_targets_with_progress, get_saving_goals
 
 
 @app.get("/api/dashboard")

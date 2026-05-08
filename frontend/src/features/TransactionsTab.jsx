@@ -8,21 +8,14 @@ import CategoryModal from "@/components/CategoryModal";
 import FilterDropdown from "@/components/FilterDropdown";
 import SortDropdown from "@/components/SortDropdown";
 
-export const DEFAULT_FILTERS = {
+const DEFAULT_FILTERS = {
   showIn: true,
   showOut: true,
   showCategorised: true,
   showUncategorised: true,
 };
 
-export const SORT_OPTIONS = [
-  { key: "date_desc", label: "Date (newest first)" },
-  { key: "date_asc", label: "Date (oldest first)" },
-  { key: "amount_desc", label: "Amount (highest first)" },
-  { key: "amount_asc", label: "Amount (lowest first)" },
-];
-
-export function TxRow({ txn, i, onEdit }) {
+function TxRow({ txn, i, onEdit }) {
   const [hov, setHov] = useState(false);
 
   return (
@@ -97,7 +90,7 @@ export function TxRow({ txn, i, onEdit }) {
   );
 }
 
-export function applyFilters(transactions, search, filters) {
+function applyFilters(transactions, search, filters) {
   const q = search.trim().toLowerCase();
 
   return (transactions || []).filter((t) => {
@@ -118,7 +111,7 @@ export function applyFilters(transactions, search, filters) {
   });
 }
 
-export function applySort(transactions, sortKey) {
+function applySort(transactions, sortKey) {
   const arr = [...(transactions || [])];
 
   switch (sortKey) {
@@ -135,6 +128,14 @@ export function applySort(transactions, sortKey) {
   }
 }
 
+function mergeTransactions(existing, incoming) {
+  const byId = new Map(
+    [...(existing || []), ...(incoming || [])].map((txn) => [txn.id, txn])
+  );
+
+  return [...byId.values()];
+}
+
 export default function TransactionsTab() {
   const { data, setData, loading } = useApi("/api/transactions");
 
@@ -142,9 +143,11 @@ export default function TransactionsTab() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [sort, setSort] = useState("date_desc");
   const [editingTxn, setEditingTxn] = useState(null);
+  const [loadStartDate, setLoadStartDate] = useState("");
+  const [syncing, setSyncing] = useState(false);
 
   const editTransaction = async (txn, field) => {
-    const id = txn?.id ?? txn?._id;
+    const id = txn?.id;
   
     if (!id) {
       console.warn("Skipping transaction with missing id:", txn);
@@ -152,7 +155,7 @@ export default function TransactionsTab() {
     }
   
     if (field === "category") {
-      setEditingTxn({ ...txn, id }); // ensure consistency
+      setEditingTxn(txn);
       return;
     }
   
@@ -170,7 +173,7 @@ export default function TransactionsTab() {
   
       setData((prev) =>
         (prev || []).map((t) =>
-          (t.id ?? t._id) === id ? { ...t, id, description: value } : t
+          t.id === id ? { ...t, description: value } : t
         )
       );
     } catch (err) {
@@ -208,26 +211,51 @@ export default function TransactionsTab() {
   );
 
   const handleLoadTransactions = async () => {
-    const startDate = prompt("Enter start date (YYYY-MM-DD)");
-    if (!startDate) return;
+    if (!loadStartDate) {
+      alert("Choose a start date first.");
+      return;
+    }
   
     try {
+      setSyncing(true);
+
       const res = await fetch(`${API}/api/transactions/load`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ start_date: startDate }),
+        body: JSON.stringify({ start_date: loadStartDate }),
       });
   
       if (!res.ok) throw new Error("Failed to load transactions");
   
       const newTxns = await res.json();
   
-      // merge safely (avoid duplicates if needed later)
-      setData((prev) => [...(prev || []), ...newTxns]);
+      setData((prev) => mergeTransactions(prev, newTxns));
     } catch (err) {
       alert(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleRefreshTransactions = async () => {
+    try {
+      setSyncing(true);
+
+      const res = await fetch(`${API}/api/transactions/refresh`, {
+        method: "POST",
+      });
+
+      if (!res.ok) throw new Error(await res.text() || "Failed to refresh transactions");
+
+      const payload = await res.json();
+
+      setData((prev) => mergeTransactions(prev, payload.transactions || []));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -262,8 +290,23 @@ export default function TransactionsTab() {
 
         <FilterDropdown filters={filters} onChange={setFilters} />
         <SortDropdown value={sort} onChange={setSort} />
+        <input
+          type="date"
+          value={loadStartDate}
+          onChange={(e) => setLoadStartDate(e.target.value)}
+          style={{
+            background: "var(--surface2)",
+            border: "1px solid var(--border2)",
+            borderRadius: 2,
+            padding: "7px 12px",
+            color: "var(--text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+          }}
+        />
         <button
           onClick={handleLoadTransactions}
+          disabled={syncing}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--border2)",
@@ -272,10 +315,28 @@ export default function TransactionsTab() {
             fontFamily: "var(--font-mono)",
             fontSize: 12,
             borderRadius: 2,
-            cursor: "pointer",
+            cursor: syncing ? "not-allowed" : "pointer",
+            opacity: syncing ? 0.7 : 1,
           }}
         >
-          + Load Transactions
+          {syncing ? "Syncing..." : "+ Load"}
+        </button>
+        <button
+          onClick={handleRefreshTransactions}
+          disabled={syncing}
+          style={{
+            padding: "7px 12px",
+            border: "1px solid var(--accent)",
+            background: "var(--accent)",
+            color: "var(--bg)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            borderRadius: 2,
+            cursor: syncing ? "not-allowed" : "pointer",
+            opacity: syncing ? 0.7 : 1,
+          }}
+        >
+          Refresh
         </button>
       </div>
 
@@ -313,7 +374,7 @@ export default function TransactionsTab() {
       ) : (
         filtered.map((txn, i) => (
           <TxRow
-            key={txn?.id ?? `${txn?.date}-${txn?.amount}-${i}`}
+            key={txn.id}
             txn={txn}
             i={i}
             onEdit={editTransaction}

@@ -44,7 +44,11 @@ export default function useSpendingTargets() {
   }, []);
 
   useEffect(() => {
-    loadTargets();
+    const timeoutId = window.setTimeout(() => {
+      loadTargets();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadTargets]);
 
   async function handleSubmit(e) {

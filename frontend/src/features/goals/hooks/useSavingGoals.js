@@ -43,7 +43,11 @@ export default function useSavingGoals() {
   }, []);
 
   useEffect(() => {
-    loadGoals();
+    const timeoutId = window.setTimeout(() => {
+      loadGoals();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadGoals]);
 
   async function handleSubmit(e) {

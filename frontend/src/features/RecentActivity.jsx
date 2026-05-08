@@ -1,6 +1,8 @@
 import useApi from "@/hooks/useApi";
 import Skel from "@/components/Skel";
 
+const SKELETON_WIDTHS = ["55%", "70%", "63%", "82%", "58%", "76%"];
+
 export default function RecentActivity() {
   const { data, loading } = useApi("/api/transactions");
 
@@ -13,10 +15,10 @@ export default function RecentActivity() {
           gap: 12,
         }}
       >
-        {Array.from({ length: 6 }).map((_, i) => (
+        {SKELETON_WIDTHS.map((width, i) => (
           <Skel
             key={i}
-            w={`${55 + Math.random() * 35}%`}
+            w={width}
           />
         ))}
       </div>

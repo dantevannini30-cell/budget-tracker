@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 import GoalProgressChart from "./GoalProgressChart";
 import useSavingGoals from "./hooks/useSavingGoals";
 import { buildSavingGoalChartData } from "./utils/chartUtils";
@@ -15,7 +13,6 @@ export default function SavingGoalsSection({
 }) {
   const {
     goals,
-    progress,
     form,
     setForm,
     handleSubmit,
@@ -24,8 +21,7 @@ export default function SavingGoalsSection({
 
   const chartData =
     buildSavingGoalChartData(
-      goals,
-      progress
+      goals
     );
 
   return (
@@ -114,9 +110,8 @@ export default function SavingGoalsSection({
         }}
       >
         {goals.map((goal) => {
-          const data = progress[goal.id];
-          const current = data?.saved || goal.current_amount || 0;
-          const target = data?.target || goal.target_amount;
+          const current = goal.current_amount || 0;
+          const target = goal.target_amount || 0;
           const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
 
           return (
