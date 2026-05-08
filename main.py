@@ -74,7 +74,7 @@ def fetch_in_range(start_date, end_date):
             # ---------------------------
 
             flat = {
-                "_id": txn.get("id"),
+                "id": txn.get("id"),
                 "date": txn.get("date"),
                 "amount": txn.get("amount"),
                 "description": txn.get("description", ""),
@@ -105,7 +105,7 @@ def format_row(transaction):
     raw_date = transaction.get("date")
     description = transaction.get("description")
     amount = transaction.get("amount")
-    txn_id = transaction.get("_id")
+    txn_id = transaction.get("id")
 
     # Convert date → DD/MM/YYYY
     date_obj = datetime.fromisoformat(raw_date.replace("Z", ""))
@@ -140,7 +140,7 @@ def push_transactions(sheet, transactions):
     rows = []
 
     for txn in transactions:
-        txn_id = txn.get("_id")
+        txn_id = txn.get("id")
 
         if txn_id in existing_ids:
             continue  # skip duplicate

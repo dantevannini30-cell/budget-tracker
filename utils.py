@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime, timedelta
-
+from classifier import classify_transaction
 DB_FILE = "transactions.db"
 
 
@@ -13,7 +13,7 @@ def get_connection():
 # ---------------------------
 # CLEANING
 # ---------------------------
-
+import uuid
 def clean_transactions(transactions):
     cleaned = []
 
@@ -22,13 +22,13 @@ def clean_transactions(transactions):
             continue
         if "transfer" in txn.get("description", "").lower():
             continue
-
+        txn_id = txn.get("id") or uuid.uuid4().hex
         cleaned.append({
-            "_id": txn["_id"],
+            "id": txn_id,
             "date": txn["date"],
             "amount": txn["amount"],
-            "description": txn.get("description", ""),
-            "category": txn.get("category", ""),
+            "description": "",
+            "category": classify_transaction(txn),
             "statement": txn.get("description", ""),
             "_account": txn["_account"],
             "balance": txn.get("balance"),

@@ -37,6 +37,10 @@ app.add_middleware(
 
 DB_FILE = "transactions.db"
 
+@app.on_event("startup")
+def startup():
+    init_db()
+
 
 def get_connection():
     conn = sqlite3.connect(DB_FILE)
@@ -215,9 +219,49 @@ def by_category_income():
 # SPENDING TARGETS
 # ---------------------------
 
+from utils import calculate_spending_target_progress
+
+
 @app.get("/api/spending-targets")
 def list_targets():
-    return get_spending_targets()
+    targets = get_spending_targets()
+
+    # Precompute ALL spending once (important optimization)
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT category, SUM(ABS(amount)) as spent
+        FROM transactions
+        WHERE amount < 0
+        GROUP BY category
+    """)
+
+    category_spend = {r["category"]: r["spent"] for r in cursor.fetchall()}
+
+    conn.close()
+
+    enriched = []
+
+    for t in targets:
+        categories = t.get("categories", [])
+
+        spent = sum(
+            category_spend.get(c, 0) for c in categories
+        )
+
+        amount = t["amount"]
+
+        enriched.append({
+            **t,
+            "current_spent": spent,
+            "remaining": amount - spent,
+            "progress_pct": (spent / amount * 100) if amount else 0,
+            "is_over": spent > amount
+        })
+
+    return enriched
+
 
 
 @app.post("/api/spending-targets")
@@ -256,3 +300,125 @@ def create_goal(goal: SavingGoalCreate):
 @app.get("/api/saving-goals/{goal_id}/progress")
 def goal_progress(goal_id: str):
     return calculate_saving_goal_progress(goal_id)
+
+
+@app.get("/api/summary")
+def summary(start_date: str = None, end_date: str = None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+    """
+
+    params = []
+
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+
+    query += " GROUP BY category ORDER BY total DESC"
+
+    cursor.execute(query, params)
+    rows = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+
+    total = sum(r["total"] for r in rows)
+
+    for r in rows:
+        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
+
+    return rows
+
+
+from fastapi import Query
+from datetime import datetime
+from database import get_connection, get_spending_targets_with_progress, get_saving_goals
+
+
+@app.get("/api/dashboard")
+def dashboard(
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # ---------------------------
+    # SUMMARY (expenses)
+    # ---------------------------
+    query = """
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount < 0
+    """
+
+    params = []
+
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+
+    query += " GROUP BY category ORDER BY total DESC"
+
+    cursor.execute(query, params)
+    summary = [dict(r) for r in cursor.fetchall()]
+
+    total_spent = sum(r["total"] for r in summary)
+
+    for r in summary:
+        r["pct"] = round((r["total"] / total_spent) * 100, 1) if total_spent else 0
+
+    # ---------------------------
+    # INCOME SUMMARY
+    # ---------------------------
+    cursor.execute("""
+        SELECT
+            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
+            SUM(ABS(amount)) AS total
+        FROM transactions
+        WHERE amount > 0
+        GROUP BY category
+        ORDER BY total DESC
+    """)
+
+    income_summary = [dict(r) for r in cursor.fetchall()]
+
+    total_income = sum(r["total"] for r in income_summary)
+
+    for r in income_summary:
+        r["pct"] = round((r["total"] / total_income) * 100, 1) if total_income else 0
+
+    conn.close()
+
+    # ---------------------------
+    # ENRICHED DATA
+    # ---------------------------
+    spending_targets = get_spending_targets_with_progress()
+    saving_goals = get_saving_goals()
+
+    return {
+        "summary": summary,
+        "income_summary": income_summary,
+        "spending_targets": spending_targets,
+        "saving_goals": saving_goals,
+        "date_range": {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+    }

@@ -1,8 +1,5 @@
 import GoalProgressChart from "./GoalProgressChart";
-
 import useSpendingTargets from "./hooks/useSpendingTargets";
-
-import { buildSpendingTargetChartData } from "./utils/chartUtils";
 
 import CategoryDropdown from "@/components/CategoryDropdown";
 
@@ -18,18 +15,18 @@ export default function SpendingTargetsSection({
 }) {
   const {
     targets,
-    progress,
     form,
     setForm,
     handleSubmit,
     loading,
   } = useSpendingTargets(budgetId);
 
-  const chartData =
-    buildSpendingTargetChartData(
-      targets,
-      progress
-    );
+  // backend already provides everything → NO LOOKUPS
+  const chartData = targets.map((t) => ({
+    name: t.name,
+    target: t.amount,
+    current: t.current_spent || 0,
+  }));
 
   return (
     <div
@@ -48,6 +45,7 @@ export default function SpendingTargetsSection({
         Spending Targets
       </div>
 
+      {/* FORM */}
       <form
         onSubmit={handleSubmit}
         style={{
@@ -111,17 +109,23 @@ export default function SpendingTargetsSection({
           placeholder="Select categories..."
         />
 
-        <button type="submit" style={primaryBtn} disabled={loading}>
+        <button
+          type="submit"
+          style={primaryBtn}
+          disabled={loading}
+        >
           {loading ? "Adding..." : "Add Spending Target"}
         </button>
       </form>
 
+      {/* CHART */}
       <GoalProgressChart
         title="Spending Progress"
         data={chartData}
         color="#ff4d6d"
       />
 
+      {/* LIST */}
       <div
         style={{
           display: "flex",
@@ -131,7 +135,7 @@ export default function SpendingTargetsSection({
         }}
       >
         {targets.map((target) => {
-          const data = progress[target.id];
+          const pct = target.progress_pct || 0;
 
           return (
             <div
@@ -142,11 +146,7 @@ export default function SpendingTargetsSection({
                 padding: 16,
               }}
             >
-              <div
-                style={{
-                  marginBottom: 12,
-                }}
-              >
+              <div style={{ marginBottom: 12 }}>
                 <div
                   style={{
                     fontWeight: 600,
@@ -166,52 +166,27 @@ export default function SpendingTargetsSection({
                 </div>
               </div>
 
-              {data?.periods?.map((period) => {
-                const pct = Math.min(
-                  (period.spent / period.limit) * 100,
-                  100
-                );
+              {/* SINGLE SOURCE OF TRUTH */}
+              <div style={{ marginBottom: 6, fontSize: 12 }}>
+                ${target.current_spent || 0} / ${target.amount}
+              </div>
 
-                return (
-                  <div
-                    key={period.label}
-                    style={{ marginBottom: 12 }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginBottom: 6,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span>{period.label}</span>
-
-                      <span>
-                        ${period.spent.toFixed(2)} / $
-                        {period.limit.toFixed(2)}
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        height: 10,
-                        background: "var(--surface2)",
-                        borderRadius: 999,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${pct}%`,
-                          height: "100%",
-                          background: "#ff4d6d",
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+              <div
+                style={{
+                  height: 10,
+                  background: "var(--surface2)",
+                  borderRadius: 999,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${pct}%`,
+                    height: "100%",
+                    background: target.is_over ? "#ff4d6d" : "#00d4aa",
+                  }}
+                />
+              </div>
             </div>
           );
         })}
