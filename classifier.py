@@ -32,16 +32,54 @@ def get_additional_classification_context(txn):
     amount = txn.get("amount")
 
     categories = get_known_categories()
-    examples = get_similar_examples(statement, amount=amount)
+    examples = get_similar_examples(statement, amount=amount, limit=10)
 
     return {
         "existing_categories": categories,
         "examples": examples,
     }
 
+from database import get_connection
+
+def get_existing_classification(statement):
+    """
+    Checks the DB for a human-verified classification for an identical statement.
+    """
+    if not statement:
+        return None
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # We join transactions with classifications to find a match 
+    # where the status is 'accepted' or 'manual'
+    query = """
+        SELECT tc.category 
+        FROM transactions t
+        JOIN transaction_classifications tc ON t.id = tc.transaction_id
+        WHERE t.statement = ? 
+          AND (tc.status = 'accepted' OR tc.status = 'manual')
+        ORDER BY tc.updated_at DESC
+        LIMIT 1
+    """
+    
+    try:
+        cursor.execute(query, (statement,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 def classify_transaction(txn):
     statement = txn.get("statement") or txn.get("description") or ""
+    
+    # --- NEW STEP: Exact Match Look-up ---
+    existing_category = get_existing_classification(statement)
+    if existing_category:
+        print(f"[classifier] cache hit for {txn.get('id')}: {existing_category}")
+        return existing_category
+    # -------------------------------------
+
     context = get_additional_classification_context(txn)
 
     if not statement.strip():
@@ -49,11 +87,9 @@ def classify_transaction(txn):
         return ""
 
     model = resolve_model()
-
     if not model:
         print("[classifier] no Ollama models available")
         return ""
-
     payload = {
         "model": model,
         "stream": False,
@@ -216,3 +252,48 @@ def parse_category(raw):
         return ""
 
     return category.strip()
+
+def run_test_suite(limit=10):
+    print(f"--- Starting Classification Test (Limit: {limit}) ---")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Grab recent transactions
+    cursor.execute("""
+        SELECT id, statement, description, amount 
+        FROM transactions 
+        ORDER BY date DESC 
+        LIMIT ?
+    """, (limit,))
+    
+    test_txns = cursor.fetchall()
+    
+    results = []
+    for row in test_txns:
+        txn_data = {
+            "id": row[0],
+            "statement": row[1],
+            "description": row[2],
+            "amount": row[3]
+        }
+        
+        # Run your classification logic
+        category = classify_transaction(txn_data)
+        
+        results.append({
+            "statement": txn_data["statement"],
+            "category": category if category else "FAILED"
+        })
+
+    # Print a clean summary
+    print("\n--- TEST RESULTS ---")
+    print(f"{'STATEMENT':<40} | {'CATEGORY'}")
+    print("-" * 60)
+    for res in results:
+        stmt = (res['statement'][:37] + '..') if len(res['statement']) > 37 else res['statement']
+        print(f"{stmt:<40} | {res['category']}")
+
+if __name__ == "__main__":
+    run_test_suite(10)
+

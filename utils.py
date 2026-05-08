@@ -12,7 +12,9 @@ def get_connection():
 # ---------------------------
 # CLEANING
 # ---------------------------
-import uuid
+from transaction_identity import get_transaction_id
+
+
 def clean_transactions(transactions):
     cleaned = []
 
@@ -21,7 +23,7 @@ def clean_transactions(transactions):
             continue
         if "transfer" in txn.get("description", "").lower():
             continue
-        txn_id = txn.get("id") or uuid.uuid4().hex
+        txn_id = get_transaction_id(txn)
         cleaned.append({
             "id": txn_id,
             "date": txn["date"],

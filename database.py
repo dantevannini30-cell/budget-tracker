@@ -1,6 +1,13 @@
 import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
+import json
+import math
+import urllib.request
+import urllib.error
+import os
+
+from transaction_identity import get_external_transaction_id, get_transaction_id
 
 DB_FILE = "transactions.db"
 
@@ -167,10 +174,26 @@ def ingest_transactions(transactions):
     inserted_ids = []
 
     for txn in transactions:
-        txn_id = txn.get("id")
+        external_txn_id = get_external_transaction_id(txn)
+        txn_id = get_transaction_id(txn)
 
-        if not txn_id:
-            txn_id = uuid.uuid4().hex
+        if not external_txn_id:
+            cursor.execute("""
+                SELECT id
+                FROM transactions
+                WHERE date = ?
+                AND amount = ?
+                AND statement = ?
+                AND COALESCE(account_id, '') = ?
+                LIMIT 1
+            """, (
+                txn.get("date"),
+                txn.get("amount"),
+                txn.get("statement", ""),
+                txn.get("_account", ""),
+            ))
+            if cursor.fetchone():
+                continue
 
         cursor.execute("""
         INSERT OR IGNORE INTO transactions (
@@ -805,91 +828,6 @@ def get_known_categories(limit=50):
     return categories
 
 
-# def get_similar_examples(statement, amount=None, limit=5):
-#     """Return accepted transactions whose statement shares keywords with `statement`.
-
-#     Splits the statement into words of 4+ characters and queries for rows
-#     containing any of those words.  Falls back to a recency sample if no
-#     keywords produce results.
-#     """
-#     conn = get_connection()
-#     cursor = conn.cursor()
-
-#     # Build keyword list from meaningful words (≥4 chars, alpha-only)
-#     words = [
-#         w.strip().lower()
-#         for w in statement.replace("/", " ").split()
-#         if w.isalpha() and len(w) >= 4
-#     ]
-
-#     rows = []
-
-#     if words:
-#         # LIKE conditions for each keyword — OR across words
-#         like_clauses = " OR ".join(
-#             ["LOWER(COALESCE(t.statement, t.description)) LIKE ?"] * len(words)
-#         )
-#         params = [f"%{w}%" for w in words] + [limit]
-
-#         cursor.execute(f"""
-#             SELECT
-#                 t.statement,
-#                 t.description,
-#                 t.amount,
-#                 t.date,
-#                 c.category
-#             FROM transactions t
-#             JOIN transaction_classifications c
-#                 ON c.transaction_id = t.id
-#             WHERE c.status = 'accepted'
-#               AND c.category IS NOT NULL
-#               AND c.category != ''
-#               AND ({like_clauses})
-#             ORDER BY t.date DESC
-#             LIMIT ?
-#         """, params)
-
-#         rows = cursor.fetchall()
-
-#     # Fallback: most-recent accepted transactions of any kind
-#     if not rows:
-#         cursor.execute("""
-#             SELECT
-#                 t.statement,
-#                 t.description,
-#                 t.amount,
-#                 t.date,
-#                 c.category
-#             FROM transactions t
-#             JOIN transaction_classifications c
-#                 ON c.transaction_id = t.id
-#             WHERE c.status = 'accepted'
-#               AND c.category IS NOT NULL
-#               AND c.category != ''
-#             ORDER BY t.date DESC
-#             LIMIT ?
-#         """, (limit,))
-#         rows = cursor.fetchall()
-
-#     examples = [
-#         {
-#             "statement": row["statement"] or row["description"] or "",
-#             "amount": row["amount"],
-#             "date": row["date"],
-#             "category": row["category"],
-#         }
-#         for row in rows
-#     ]
-
-#     conn.close()
-#     return examples
-import json
-import math
-import urllib.request
-import urllib.error
-import os
-
-
 EMBED_MODEL = "nomic-embed-text:latest"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 EMBED_URL = OLLAMA_URL.replace("/api/chat", "/api/embeddings").replace("/api/generate", "/api/embeddings")
@@ -1002,7 +940,6 @@ def get_similar_examples(statement, transaction_id=None, amount=None, limit=5):
           AND c.category IS NOT NULL
           AND c.category != ''
         ORDER BY t.date DESC
-        LIMIT 200
     """)
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
