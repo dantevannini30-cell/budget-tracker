@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 
 import {
   getSpendingTargets,
@@ -6,7 +11,7 @@ import {
   createSpendingTarget,
 } from "@/api/goals";
 
-export default function useSpendingTargets(budgetId) {
+export default function useSpendingTargets() {
   const [targets, setTargets] = useState([]);
   const [progress, setProgress] = useState({});
   const [loading, setLoading] = useState(false);
@@ -18,45 +23,59 @@ export default function useSpendingTargets(budgetId) {
     categories: [],
   });
 
-  // prevents stale overwrites
+  // prevents stale async overwrites
   const requestIdRef = useRef(0);
 
   const loadTargets = useCallback(async () => {
-    if (!budgetId) return;
-
     const requestId = ++requestIdRef.current;
 
     try {
       setLoading(true);
 
-      const data = await getSpendingTargets(budgetId);
-      if (requestId !== requestIdRef.current) return;
+      const data = await getSpendingTargets();
+
+      // ignore stale response
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
 
       const safeTargets = data || [];
+
       setTargets(safeTargets);
 
-      // fetch progress in parallel
+      // fetch all progress in parallel
       const progressEntries = await Promise.all(
         safeTargets
           .filter((t) => t?.id || t?._id)
           .map(async (target) => {
             const id = target.id || target._id;
-            const p = await getSpendingTargetProgress(budgetId, id);
+
+            const p =
+              await getSpendingTargetProgress(id);
+
             return [id, p];
           })
       );
 
-      if (requestId !== requestIdRef.current) return;
+      // ignore stale response
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
 
-      setProgress(Object.fromEntries(progressEntries));
+      setProgress(
+        Object.fromEntries(progressEntries)
+      );
     } catch (err) {
-      console.error("Failed loading targets:", err);
+      console.error(
+        "Failed loading spending targets:",
+        err
+      );
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false);
       }
     }
-  }, [budgetId]);
+  }, []);
 
   useEffect(() => {
     loadTargets();
@@ -68,12 +87,13 @@ export default function useSpendingTargets(budgetId) {
     try {
       setLoading(true);
 
-      const newTarget = await createSpendingTarget(budgetId, {
-        name: form.name,
-        amount: Number(form.amount),
-        period: form.period,
-        categories: form.categories,
-      });
+      const newTarget =
+        await createSpendingTarget({
+          name: form.name,
+          amount: Number(form.amount),
+          period: form.period,
+          categories: form.categories,
+        });
 
       // reset form immediately
       setForm({
@@ -83,13 +103,19 @@ export default function useSpendingTargets(budgetId) {
         categories: [],
       });
 
-      // OPTIMISTIC UPDATE (no full refetch needed)
-      setTargets((prev) => [...prev, newTarget]);
+      // optimistic update
+      setTargets((prev) => [
+        ...prev,
+        newTarget,
+      ]);
 
-      // fetch progress only for new item
+      // fetch only new progress
       if (newTarget?.id || newTarget?._id) {
-        const id = newTarget.id || newTarget._id;
-        const p = await getSpendingTargetProgress(budgetId, id);
+        const id =
+          newTarget.id || newTarget._id;
+
+        const p =
+          await getSpendingTargetProgress(id);
 
         setProgress((prev) => ({
           ...prev,
@@ -97,7 +123,10 @@ export default function useSpendingTargets(budgetId) {
         }));
       }
     } catch (err) {
-      console.error(err);
+      console.error(
+        "Failed creating spending target:",
+        err
+      );
     } finally {
       setLoading(false);
     }

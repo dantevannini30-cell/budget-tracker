@@ -1,102 +1,112 @@
 import { API } from "@/shared/api/client";
 
-// ─── Spending Targets ─────────────────────────────────────
+// ─── Shared Helper ────────────────────────────────────────
 
-export async function getSpendingTargets(budgetId) {
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/spending-targets`
-    : `${API}/api/spending-targets`;
-  
-  const res = await fetch(endpoint);
-
+async function handleResponse(res, fallbackMessage) {
   if (!res.ok) {
-    throw new Error("Failed to load spending targets");
+    const text = await res.text();
+    throw new Error(text || fallbackMessage);
   }
 
   return res.json();
 }
 
-export async function createSpendingTarget(budgetId, payload) {
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/spending-targets`
-    : `${API}/api/spending-targets`;
-  
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+// ─── Spending Targets ────────────────────────────────────
 
-  if (!res.ok) {
-    throw new Error("Failed to create spending target");
-  }
+export async function getSpendingTargets() {
+  const res = await fetch(
+    `${API}/api/spending-targets`
+  );
 
-  return res.json();
+  return handleResponse(
+    res,
+    "Failed to load spending targets"
+  );
 }
 
-export async function getSpendingTargetProgress(budgetId, targetId) {
+export async function createSpendingTarget(payload) {
+  const res = await fetch(
+    `${API}/api/spending-targets`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  return handleResponse(
+    res,
+    "Failed to create spending target"
+  );
+}
+
+export async function getSpendingTargetProgress(targetId) {
   if (!targetId) {
-    console.warn("Missing targetId in getSpendingTargetProgress");
+    console.warn(
+      "Missing targetId in getSpendingTargetProgress"
+    );
+
     return null;
   }
 
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/spending-targets/${targetId}/progress`
-    : `${API}/api/spending-targets/${targetId}/progress`;
+  const res = await fetch(
+    `${API}/api/spending-targets/${targetId}/progress`
+  );
 
-  const res = await fetch(endpoint);
-
-  if (!res.ok) {
-    throw new Error("Failed to load spending progress");
-  }
-
-  return res.json();
+  return handleResponse(
+    res,
+    "Failed to load spending target progress"
+  );
 }
 
-// ─── Saving Goals ─────────────────────────────────────────
+// ─── Saving Goals ────────────────────────────────────────
 
-export async function getSavingGoals(budgetId) {
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/saving-goals`
-    : `${API}/api/saving-goals`;
-  
-  const res = await fetch(endpoint);
+export async function getSavingGoals() {
+  const res = await fetch(
+    `${API}/api/saving-goals`
+  );
 
-  if (!res.ok) {
-    throw new Error("Failed to load saving goals");
-  }
-
-  return res.json();
+  return handleResponse(
+    res,
+    "Failed to load saving goals"
+  );
 }
 
-export async function createSavingGoal(budgetId, payload) {
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/saving-goals`
-    : `${API}/api/saving-goals`;
-  
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+export async function createSavingGoal(payload) {
+  const res = await fetch(
+    `${API}/api/saving-goals`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
 
-  if (!res.ok) {
-    throw new Error("Failed to create saving goal");
-  }
-
-  return res.json();
+  return handleResponse(
+    res,
+    "Failed to create saving goal"
+  );
 }
 
-export async function getSavingGoalProgress(budgetId, goalId) {
-  const endpoint = budgetId 
-    ? `${API}/api/budgets/${budgetId}/saving-goals/${goalId}/progress`
-    : `${API}/api/saving-goals/${goalId}/progress`;
-  
-  const res = await fetch(endpoint);
+export async function getSavingGoalProgress(goalId) {
+  if (!goalId) {
+    console.warn(
+      "Missing goalId in getSavingGoalProgress"
+    );
 
-  if (!res.ok) {
-    throw new Error("Failed to load saving goal progress");
+    return null;
   }
 
-  return res.json();
+  const res = await fetch(
+    `${API}/api/saving-goals/${goalId}/progress`
+  );
+
+  return handleResponse(
+    res,
+    "Failed to load saving goal progress"
+  );
 }

@@ -197,6 +197,33 @@ export default function TransactionsTab() {
     sort
   );
 
+  const handleLoadTransactions = async () => {
+    const startDate = prompt("Enter start date (YYYY-MM-DD)");
+
+    if (!startDate) return;
+
+    try {
+      const res = await fetch(`${API}/api/transactions/load`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ start_date: startDate }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to load transactions");
+      }
+
+      // reload table data after ingestion
+      const updated = await fetch(`${API}/api/transactions`);
+      const json = await updated.json();
+
+      setData(json);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
   return (
     <div
       style={{
@@ -219,6 +246,41 @@ export default function TransactionsTab() {
           style={{ flex: 1, background: "var(--surface2)", border: "1px solid var(--border2)", borderRadius: 2, padding: "7px 12px", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12, transition: "border-color 0.15s" }} />
         <FilterDropdown filters={filters} onChange={setFilters} />
         <SortDropdown value={sort} onChange={setSort} />
+        <button
+        onClick={async () => {
+          const startDate = prompt("Enter start date (YYYY-MM-DD):");
+          if (!startDate) return;
+
+          try {
+            const res = await fetch(`${API}/api/transactions/load`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ start_date: startDate }),
+            });
+
+            if (!res.ok) throw new Error("Failed to load transactions");
+
+            const newTxns = await res.json();
+
+            // merge into existing state
+            setData(prev => [...(prev || []), ...newTxns]);
+          } catch (err) {
+            alert(err.message);
+          }
+        }}
+        style={{
+          padding: "7px 12px",
+          border: "1px solid var(--border2)",
+          background: "var(--surface2)",
+          color: "var(--text)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+          borderRadius: 2,
+          cursor: "pointer",
+        }}
+      >
+        + Load Transactions
+      </button>
       </div>
 
       {/* Header */}
