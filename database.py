@@ -109,6 +109,26 @@ def ingest_transactions(transactions):
 
         if cursor.rowcount:
             inserted_ids.append(txn_id)
+        else:
+            cursor.execute("""
+                UPDATE transactions
+                SET
+                    account_id = CASE
+                        WHEN (account_id IS NULL OR account_id = '') THEN ?
+                        ELSE account_id
+                    END,
+                    account_name = CASE
+                        WHEN (account_name IS NULL OR account_name = '') THEN ?
+                        ELSE account_name
+                    END,
+                    balance = COALESCE(?, balance)
+                WHERE id = ?
+            """, (
+                txn.get("_account", ""),
+                txn.get("account_name", ""),
+                txn.get("balance"),
+                txn_id,
+            ))
 
     conn.commit()
     conn.close()

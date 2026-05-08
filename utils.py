@@ -30,7 +30,7 @@ def clean_transactions(transactions):
             "description": "",
             "category": classify_transaction(txn),
             "statement": txn.get("description", ""),
-            "_account": txn["_account"],
+            "_account": txn.get("_account", ""),
             "account_name": txn.get("account_name", ""),
             "balance": txn.get("balance"),
         })
