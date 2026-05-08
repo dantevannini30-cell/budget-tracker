@@ -24,6 +24,7 @@ import {
   DEFAULT_FILTERS,
   applyFilters,
   applySort,
+  TxRow,
 } from "./TransactionsTab";
 
 // --- Constants & Sub-components ---
@@ -59,40 +60,6 @@ const PieChartWrapper = ({ data, title }) => (
 );
 
 // Note: You should also paste your TxRow component here if it's not exported elsewhere
-function TxRow({ txn, i, onEdit }) {
-  const isInc = txn.amount > 0;
-  return (
-    <div className="fade-up" style={{ 
-      display: "grid", 
-      gridTemplateColumns: "90px 90px 120px 1.4fr 1.4fr", 
-      gap: 12, 
-      padding: "12px 16px", 
-      borderBottom: "1px solid var(--border)",
-      animationDelay: `${i * 0.03}s`,
-      alignItems: "center"
-    }}>
-      <span style={{ fontSize: 11, color: "var(--muted2)", fontFamily: "var(--font-mono)" }}>{txn.date}</span>
-      <span style={{ fontSize: 12, fontWeight: 500, color: isInc ? "var(--green)" : "var(--red)", fontFamily: "var(--font-mono)" }}>
-        {isInc ? "+" : ""}{txn.amount.toFixed(2)}
-      </span>
-      <span 
-        onClick={() => onEdit(txn, "category")}
-        style={{ fontSize: 11, color: "var(--accent)", cursor: "pointer", textDecoration: "underline" }}
-      >
-        {txn.category || "Uncategorized"}
-      </span>
-      <span 
-        onClick={() => onEdit(txn, "description")}
-        style={{ fontSize: 12, color: "var(--text)", cursor: "pointer" }}
-      >
-        {txn.description || "—"}
-      </span>
-      <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {txn.statement_description}
-      </span>
-    </div>
-  );
-}
 
 // --- Main Component ---
 export default function BudgetDashboard({ budgetId, onClearBudget }) {
@@ -135,7 +102,7 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
       const value = prompt("Edit description:", txn.description || "");
       if (value === null) return;
       try {
-        const res = await fetch(`${API}/api/transactions/${txn.id}/category`, {
+        const res = await fetch(`${API}/api/transactions/${txn.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ description: value }),
@@ -149,7 +116,7 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
   const submitCategoryEdit = async (newCategory) => {
     if (!editingTxn) return;
     try {
-      const res = await fetch(`${API}/api/transactions/${editingTxn.id}/category`, {
+      const res = await fetch(`${API}/api/transactions/${editingTxn.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: newCategory }),
@@ -158,7 +125,7 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
       setTransactions(prev => prev.map(item => item.id === editingTxn.id ? { ...item, category: newCategory } : item));
       setEditingTxn(null);
     } catch (err) { alert(err.message); }
-  };
+    };
 
   const calculateCategoryTotals = (txns, isIncome = true) => {
     const filtered = txns.filter(t => (isIncome && t.amount > 0) || (!isIncome && t.amount < 0));

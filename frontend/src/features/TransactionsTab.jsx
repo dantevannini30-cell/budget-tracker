@@ -34,7 +34,7 @@ export const SORT_OPTIONS = [
   },
 ];
 
-function TxRow({ txn, i, onEdit }) {
+export function TxRow({ txn, i, onEdit }) {
   const [hov, setHov] = useState(false);
   return (
     <div className="fade-up" style={{
@@ -62,42 +62,6 @@ function TxRow({ txn, i, onEdit }) {
   );
 }
 
-const editTransaction = async (txn, field) => {
-  if (field === "category") {
-    setEditingTxn(txn);
-  } else {
-    const value = prompt("Edit description:", txn.description || "");
-    if (value === null) return;
-    try {
-      const res = await fetch(`${API}/api/transactions/${txn.id}/category`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: value }),
-      });
-      if (!res.ok) throw new Error("Failed to update transaction");
-      setData(prev => prev.map(item => item.id === txn.id ? { ...item, description: value } : item));
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-};
-
-const submitCategoryEdit = async (newCategory) => {
-  if (!editingTxn) return;
-  try {
-    const res = await fetch(`${API}/api/transactions/${editingTxn.id}/category`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category: newCategory }),
-    });
-    if (!res.ok) throw new Error("Failed to update transaction");
-    setData(prev => prev.map(item => item.id === editingTxn.id ? { ...item, category: newCategory } : item));
-    setEditingTxn(null);
-  } catch (err) {
-    alert(err.message);
-  }
-};
-  
 export function applyFilters(
   transactions,
   search,
@@ -187,6 +151,42 @@ export default function TransactionsTab() {
 
   const [editingTxn, setEditingTxn] =
     useState(null);
+
+  const editTransaction = async (txn, field) => {
+    if (field === "category") {
+      setEditingTxn(txn);
+    } else {
+      const value = prompt("Edit description:", txn.description || "");
+      if (value === null) return;
+      try {
+        const res = await fetch(`${API}/api/transactions/${txn.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: value }),
+        });
+        if (!res.ok) throw new Error("Failed to update transaction");
+        setData(prev => prev.map(item => item.id === txn.id ? { ...item, description: value } : item));
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+  };
+
+  const submitCategoryEdit = async (newCategory) => {
+    if (!editingTxn) return;
+    try {
+      const res = await fetch(`${API}/api/transactions/${editingTxn.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: newCategory }),
+      });
+      if (!res.ok) throw new Error("Failed to update transaction");
+      setData(prev => prev.map(item => item.id === editingTxn.id ? { ...item, category: newCategory } : item));
+      setEditingTxn(null);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const filtered = applySort(
     applyFilters(
