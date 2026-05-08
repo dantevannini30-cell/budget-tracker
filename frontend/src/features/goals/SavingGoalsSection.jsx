@@ -8,11 +8,82 @@ import {
   primaryBtn,
 } from "@/shared/styles/ui";
 
+const HISTORY_COUNTS = [4, 8, 12, 24];
+
+function SavingHistoryPanel({ count, onCountChange }) {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        paddingTop: 14,
+        borderTop: "1px solid var(--border)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            color: "var(--muted2)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            textTransform: "uppercase",
+          }}
+        >
+          Progress history
+        </div>
+
+        <select
+          value={count}
+          onChange={(e) => onCountChange(Number(e.target.value))}
+          style={{
+            ...inputStyle,
+            padding: "5px 8px",
+            width: 88,
+          }}
+        >
+          {HISTORY_COUNTS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div
+        style={{
+          height: 140,
+          border: "1px solid var(--border2)",
+          background: "var(--surface2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 20,
+          color: "var(--muted2)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          textAlign: "center",
+        }}
+      >
+        Saving goals only store the current amount right now. Add dated saving
+        updates to chart progress over time.
+      </div>
+    </div>
+  );
+}
+
 export default function SavingGoalsSection({
   budgetId,
 }) {
   const {
     goals,
+    accounts,
     form,
     setForm,
     handleSubmit,
@@ -23,6 +94,8 @@ export default function SavingGoalsSection({
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [historyCounts, setHistoryCounts] = useState({});
 
   const submitAndClose = async (e) => {
     e.preventDefault();
@@ -49,6 +122,7 @@ export default function SavingGoalsSection({
       target_amount: String(goal.target_amount ?? ""),
       current_amount: String(goal.current_amount ?? ""),
       start_date: (goal.start_date || "").slice(0, 10),
+      account_id: goal.account_id || "",
     });
     setEditingId(goal.id);
     setModalOpen(true);
@@ -185,7 +259,7 @@ export default function SavingGoalsSection({
 
             <input
               type="number"
-              placeholder="Current amount (optional)"
+              placeholder={form.account_id ? "Current amount from account" : "Current amount (optional)"}
               value={form.current_amount}
               onChange={(e) =>
                 setForm({
@@ -194,7 +268,28 @@ export default function SavingGoalsSection({
                 })
               }
               style={inputStyle}
+              disabled={Boolean(form.account_id)}
             />
+
+            {accounts.length > 0 && (
+              <select
+                value={form.account_id}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    account_id: e.target.value,
+                  })
+                }
+                style={inputStyle}
+              >
+                <option value="">Manual balance</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · ${Number(account.latest_balance || 0).toFixed(2)}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <input
               type="date"
@@ -240,10 +335,13 @@ export default function SavingGoalsSection({
           const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
           const displayPct = Math.round(pct);
           const startDate = goal.start_date;
+          const accountLabel = goal.account_name || goal.account_id;
+          const expanded = expandedId === goal.id;
+          const historyCount = historyCounts[goal.id] || 8;
 
           return (
             <div
-              onClick={() => openEditModal(goal)}
+              onClick={() => setExpandedId(expanded ? null : goal.id)}
               key={goal.id}
               style={{
                 padding: "16px 20px",
@@ -254,7 +352,7 @@ export default function SavingGoalsSection({
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
+                  alignItems: "center",
                   gap: 12,
                   marginBottom: 8,
                 }}
@@ -268,16 +366,39 @@ export default function SavingGoalsSection({
                   {goal.name}
                 </div>
 
-                <div
+                <button
+                  type="button"
+                  aria-label={`Edit ${goal.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEditModal(goal);
+                  }}
                   style={{
+                    width: 28,
+                    height: 28,
+                    border: "1px solid var(--border2)",
+                    borderRadius: 2,
+                    background: "var(--surface2)",
                     color: "var(--muted2)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
+                    cursor: "pointer",
+                    fontSize: 18,
+                    lineHeight: "18px",
                     flexShrink: 0,
                   }}
                 >
-                  {displayPct}% · ${current.toFixed(2)} / ${target.toFixed(2)}
-                </div>
+                  ⋯
+                </button>
+              </div>
+
+              <div
+                style={{
+                  color: "var(--muted2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  marginBottom: 8,
+                }}
+              >
+                {displayPct}% · ${current.toFixed(2)} / ${target.toFixed(2)}
               </div>
 
               <div
@@ -298,7 +419,7 @@ export default function SavingGoalsSection({
                 />
               </div>
 
-              {startDate && (
+              {(startDate || accountLabel) && (
                 <div
                   style={{
                     color: "var(--muted)",
@@ -308,8 +429,21 @@ export default function SavingGoalsSection({
                     textTransform: "uppercase",
                   }}
                 >
-                  From {startDate.slice(0, 10)}
+                  {startDate ? `From ${startDate.slice(0, 10)}` : ""}
+                  {accountLabel ? ` · ${accountLabel}` : ""}
                 </div>
+              )}
+
+              {expanded && (
+                <SavingHistoryPanel
+                  count={historyCount}
+                  onCountChange={(count) =>
+                    setHistoryCounts((prev) => ({
+                      ...prev,
+                      [goal.id]: count,
+                    }))
+                  }
+                />
               )}
             </div>
           );

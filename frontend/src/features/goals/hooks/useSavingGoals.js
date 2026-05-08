@@ -6,6 +6,7 @@ import {
 } from "react";
 
 import {
+  getAccounts,
   getSavingGoals,
   createSavingGoal,
   updateSavingGoal,
@@ -17,10 +18,12 @@ const blankForm = () => ({
   target_amount: "",
   current_amount: "",
   start_date: today(),
+  account_id: "",
 });
 
 export default function useSavingGoals() {
   const [goals, setGoals] = useState([]);
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState(blankForm);
@@ -47,13 +50,24 @@ export default function useSavingGoals() {
     }
   }, []);
 
+  const loadAccounts = useCallback(async () => {
+    try {
+      const data = await getAccounts();
+      setAccounts(data || []);
+    } catch (err) {
+      console.error("Failed loading accounts:", err);
+      setAccounts([]);
+    }
+  }, []);
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       loadGoals();
+      loadAccounts();
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [loadGoals]);
+  }, [loadAccounts, loadGoals]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -66,6 +80,7 @@ export default function useSavingGoals() {
         target_amount: Number(form.target_amount),
         current_amount: Number(form.current_amount || 0),
         start_date: form.start_date,
+        account_id: form.account_id || null,
       });
 
       setForm(blankForm());
@@ -88,6 +103,7 @@ export default function useSavingGoals() {
         target_amount: Number(form.target_amount),
         current_amount: Number(form.current_amount || 0),
         start_date: form.start_date,
+        account_id: form.account_id || null,
       });
 
       setForm(blankForm());
@@ -101,6 +117,7 @@ export default function useSavingGoals() {
 
   return {
     goals,
+    accounts,
     form,
     setForm,
     handleSubmit,

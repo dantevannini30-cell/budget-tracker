@@ -79,6 +79,7 @@ def fetch_in_range(start_date, end_date):
                 "amount": txn.get("amount"),
                 "description": txn.get("description", ""),
                 "_account": txn.get("account", {}).get("id"),
+                "account_name": txn.get("account", {}).get("name", ""),
                 "balance": txn.get("balance"),
             }
 

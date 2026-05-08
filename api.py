@@ -10,6 +10,8 @@ from database import (
     get_connection,
     ingest_transactions,
     get_latest_transaction_date,
+    get_accounts,
+    get_account_transactions,
     create_spending_target,
     update_spending_target,
     get_spending_targets_with_progress,
@@ -70,6 +72,7 @@ class SavingGoalCreate(BaseModel):
     target_amount: float
     current_amount: float = 0
     start_date: str | None = None
+    account_id: str | None = None
 
 
 # ---------------------------
@@ -135,6 +138,16 @@ def get_transactions():
     conn.close()
 
     return rows
+
+
+@app.get("/api/accounts")
+def list_accounts():
+    return get_accounts()
+
+
+@app.get("/api/accounts/{account_id}/transactions")
+def list_account_transactions(account_id: str):
+    return get_account_transactions(account_id)
 
 
 @app.put("/api/transactions/{transaction_id}")
@@ -286,6 +299,7 @@ def create_goal(goal: SavingGoalCreate):
         goal.target_amount,
         goal.current_amount,
         goal.start_date,
+        goal.account_id,
     )
 
 
@@ -297,6 +311,7 @@ def update_goal(goal_id: str, goal: SavingGoalCreate):
         goal.target_amount,
         goal.current_amount,
         goal.start_date,
+        goal.account_id,
     )
 
     if not updated:

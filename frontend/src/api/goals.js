@@ -34,6 +34,11 @@ export async function updateSpendingTarget(id, payload) {
 
 // ─── Saving Goals ────────────────────────────────
 
+export async function getAccounts() {
+  const res = await fetch(`${API}/api/accounts`);
+  return handleResponse(res, "Failed to load accounts");
+}
+
 export async function getSavingGoals() {
   const res = await fetch(`${API}/api/saving-goals`);
   return handleResponse(res, "Failed to load saving goals");

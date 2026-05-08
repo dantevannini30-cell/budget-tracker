@@ -8,7 +8,6 @@ import {
 } from "recharts";
 
 import { API } from "@/api/constants";
-import StatCard from "@/components/StatCard";
 import Skel from "@/components/Skel";
 
 const PIE_COLORS = [
@@ -21,6 +20,98 @@ const PIE_COLORS = [
   "#0891b2",
   "#06b6d4",
 ];
+
+const formatMoney = (value) => `$${Number(value || 0).toFixed(2)}`;
+
+function AccountCard({ account }) {
+  return (
+    <div
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderTop: "2px solid var(--accent)",
+        borderRadius: 2,
+        padding: "18px 20px",
+        minWidth: 220,
+      }}
+    >
+      <div
+        style={{
+          color: "var(--muted2)",
+          fontSize: 10,
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          fontFamily: "var(--font-mono)",
+          marginBottom: 10,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {account.name || account.id}
+      </div>
+
+      <div
+        style={{
+          fontFamily: "var(--font-display)",
+          fontSize: 34,
+          lineHeight: 1,
+          color: "var(--accent)",
+        }}
+      >
+        {formatMoney(account.latest_balance)}
+      </div>
+
+      <div
+        style={{
+          color: "var(--muted)",
+          fontSize: 10,
+          fontFamily: "var(--font-mono)",
+          marginTop: 8,
+        }}
+      >
+        {account.latest_date ? account.latest_date.slice(0, 10) : "No balance yet"}
+      </div>
+    </div>
+  );
+}
+
+function SmallMetric({ label, value, color }) {
+  return (
+    <div
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 2,
+        padding: "12px 14px",
+      }}
+    >
+      <div
+        style={{
+          color: "var(--muted2)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 9,
+          textTransform: "uppercase",
+          letterSpacing: "0.12em",
+          marginBottom: 5,
+        }}
+      >
+        {label}
+      </div>
+
+      <div
+        style={{
+          color,
+          fontFamily: "var(--font-mono)",
+          fontSize: 16,
+          fontWeight: 600,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
 
 const PieChartWrapper = ({ data = [], title }) => (
   <div
@@ -128,6 +219,7 @@ export default function SpendingOverviewSection({
   onDateChange,
 }) {
   const [data, setData] = useState(null);
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -142,17 +234,26 @@ export default function SpendingOverviewSection({
         if (endDate)
           params.append("end_date", endDate);
 
-        const res = await fetch(
-          `${API}/api/dashboard?${params.toString()}`
-        );
+        const [dashboardRes, accountsRes] = await Promise.all([
+          fetch(`${API}/api/dashboard?${params.toString()}`),
+          fetch(`${API}/api/accounts`),
+        ]);
 
-        if (!res.ok)
+        if (!dashboardRes.ok)
           throw new Error("Failed to load dashboard");
 
-        const json = await res.json();
+        const json = await dashboardRes.json();
         setData(json);
+
+        if (accountsRes.ok) {
+          const accountJson = await accountsRes.json();
+          setAccounts(accountJson || []);
+        } else {
+          setAccounts([]);
+        }
       } catch (err) {
         console.error(err);
+        setAccounts([]);
       } finally {
         setLoading(false);
       }
@@ -287,50 +388,68 @@ export default function SpendingOverviewSection({
 
       {/* Stats */}
       {loading ? (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gap: 12,
-          }}
-        >
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skel key={i} h={80} />
-          ))}
-        </div>
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skel key={i} h={98} />
+            ))}
+          </div>
+          <Skel h={54} />
+        </>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gap: 12,
-          }}
-        >
-          <StatCard
-            label="In"
-            value={`$${incomeTotal.toFixed(2)}`}
-            color="var(--green)"
-          />
-          <StatCard
-            label="Out"
-            value={`$${expenseTotal.toFixed(2)}`}
-            color="var(--red)"
-          />
-          <StatCard
-            label="Net"
-            value={`$${net.toFixed(2)}`}
-            color={
-              net >= 0
-                ? "var(--green)"
-                : "var(--red)"
-            }
-          />
-          <StatCard
-            label="Balance"
-            value={`$${net.toFixed(2)}`}
-            color="var(--accent)"
-          />
-        </div>
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {accounts.length > 0 ? (
+              accounts.map((account) => (
+                <AccountCard key={account.id} account={account} />
+              ))
+            ) : (
+              <div
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 2,
+                  padding: "18px 20px",
+                  color: "var(--muted2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 12,
+                }}
+              >
+                No account balances detected yet. Load new Akahu transactions to capture account IDs.
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 12,
+            }}
+          >
+            <SmallMetric
+              label="In"
+              value={formatMoney(incomeTotal)}
+              color="var(--green)"
+            />
+            <SmallMetric
+              label="Out"
+              value={formatMoney(expenseTotal)}
+              color="var(--red)"
+            />
+            <SmallMetric
+              label="Net"
+              value={formatMoney(net)}
+              color={net >= 0 ? "var(--green)" : "var(--red)"}
+            />
+          </div>
+        </>
       )}
 
       {/* Charts */}

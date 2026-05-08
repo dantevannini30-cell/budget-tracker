@@ -1,4 +1,13 @@
 import { useState } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from "recharts";
 
 import useSpendingTargets from "./hooks/useSpendingTargets";
 
@@ -9,6 +18,220 @@ import {
   inputStyle,
   primaryBtn,
 } from "@/shared/styles/ui";
+
+const HISTORY_COUNTS = [4, 8, 12, 24];
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addMonths(date, months) {
+  const next = new Date(date);
+  const day = next.getDate();
+  next.setDate(1);
+  next.setMonth(next.getMonth() + months);
+  next.setDate(Math.min(day, daysInMonth(next.getFullYear(), next.getMonth())));
+  return next;
+}
+
+function addYears(date, years) {
+  const next = new Date(date);
+  next.setFullYear(next.getFullYear() + years);
+  return next;
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function incrementDate(date, period) {
+  if (period === "weekly") return addDays(date, 7);
+  if (period === "yearly") return addYears(date, 1);
+  return addMonths(date, 1);
+}
+
+function getHistoryStart(target, count) {
+  const anchor = parseDate(target.start_date || target.period_start) || new Date();
+  const activeStart = parseDate(target.period_start) || anchor;
+  let cursor = anchor;
+
+  while (incrementDate(cursor, target.period) <= activeStart) {
+    cursor = incrementDate(cursor, target.period);
+  }
+
+  for (let i = 1; i < count; i += 1) {
+    const previous = stepBack(cursor, target.period);
+    if (previous < anchor) break;
+    cursor = previous;
+  }
+
+  return cursor;
+}
+
+function stepBack(date, period) {
+  if (period === "weekly") return addDays(date, -7);
+  if (period === "yearly") return addYears(date, -1);
+  return addMonths(date, -1);
+}
+
+function buildSpendingHistory(target, transactions, count) {
+  const categories = new Set(target.categories || []);
+  const targetAmount = Number(target.amount) || 0;
+  const start = getHistoryStart(target, count);
+  const rows = [];
+
+  let periodStart = start;
+
+  for (let i = 0; i < count; i += 1) {
+    const periodEnd = incrementDate(periodStart, target.period);
+    const spent = (transactions || []).reduce((sum, txn) => {
+      const txnDate = parseDate(txn.date);
+      const matchesCategory = categories.has(txn.category);
+      const isExpense = Number(txn.amount) < 0;
+
+      if (
+        !txnDate ||
+        !matchesCategory ||
+        !isExpense ||
+        txnDate < periodStart ||
+        txnDate >= periodEnd
+      ) {
+        return sum;
+      }
+
+      return sum + Math.abs(Number(txn.amount) || 0);
+    }, 0);
+
+    const pct = targetAmount ? (spent / targetAmount) * 100 : 0;
+
+    rows.push({
+      label: formatHistoryLabel(periodStart, target.period),
+      start: formatDate(periodStart),
+      spent,
+      pct: Math.round(pct),
+    });
+
+    periodStart = periodEnd;
+  }
+
+  return rows;
+}
+
+function formatHistoryLabel(date, period) {
+  if (period === "weekly") {
+    return `${date.getDate()} ${date.toLocaleString("en-NZ", { month: "short" })}`;
+  }
+
+  if (period === "yearly") {
+    return String(date.getFullYear());
+  }
+
+  return date.toLocaleString("en-NZ", { month: "short", year: "2-digit" });
+}
+
+function SpendingHistoryChart({ target, transactions, count, onCountChange }) {
+  const data = buildSpendingHistory(target, transactions, count);
+
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        paddingTop: 14,
+        borderTop: "1px solid var(--border)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            color: "var(--muted2)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            textTransform: "uppercase",
+          }}
+        >
+          Progress by {target.period === "budget" ? "month" : target.period}
+        </div>
+
+        <select
+          value={count}
+          onChange={(e) => onCountChange(Number(e.target.value))}
+          style={{
+            ...inputStyle,
+            padding: "5px 8px",
+            width: 88,
+          }}
+        >
+          {HISTORY_COUNTS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <ResponsiveContainer width="100%" height={190}>
+        <LineChart data={data}>
+          <XAxis
+            dataKey="label"
+            tick={{ fill: "#6b7a96", fontSize: 10, fontFamily: "DM Mono" }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fill: "#6b7a96", fontSize: 10, fontFamily: "DM Mono" }}
+            axisLine={false}
+            tickLine={false}
+            width={38}
+            domain={[0, "dataMax"]}
+            tickFormatter={(value) => `${value}%`}
+          />
+          <Tooltip
+            formatter={(value, name, item) => [
+              `${value}% · $${Number(item.payload.spent).toFixed(2)}`,
+              "Used",
+            ]}
+            labelFormatter={(_, items) => items?.[0]?.payload?.start || ""}
+            contentStyle={{
+              background: "var(--surface2)",
+              border: "1px solid var(--border)",
+              borderRadius: 2,
+              color: "var(--text)",
+            }}
+          />
+          <ReferenceLine y={100} stroke="var(--red)" strokeDasharray="4 4" />
+          <Line
+            type="monotone"
+            dataKey="pct"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            dot={{ r: 3, strokeWidth: 0, fill: "var(--accent)" }}
+            activeDot={{ r: 5 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 export default function SpendingTargetsSection({
   budgetId,
@@ -26,6 +249,8 @@ export default function SpendingTargetsSection({
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [historyCounts, setHistoryCounts] = useState({});
 
   const submitAndClose = async (e) => {
     e.preventDefault();
@@ -263,10 +488,12 @@ export default function SpendingTargetsSection({
           const spent = target.current_spent || 0;
           const isOver = pct > 100 || target.is_over;
           const startDate = target.period_start || target.start_date;
+          const expanded = expandedId === target.id;
+          const historyCount = historyCounts[target.id] || 8;
 
           return (
             <div
-              onClick={() => openEditModal(target)}
+              onClick={() => setExpandedId(expanded ? null : target.id)}
               key={target.id}
               style={{
                 padding: "16px 20px",
@@ -277,7 +504,7 @@ export default function SpendingTargetsSection({
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
+                  alignItems: "center",
                   gap: 12,
                   marginBottom: 8,
                 }}
@@ -291,16 +518,39 @@ export default function SpendingTargetsSection({
                   {target.name}
                 </div>
 
-                <div
+                <button
+                  type="button"
+                  aria-label={`Edit ${target.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEditModal(target);
+                  }}
                   style={{
-                    color: isOver ? "var(--red)" : "var(--muted2)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
+                    width: 28,
+                    height: 28,
+                    border: "1px solid var(--border2)",
+                    borderRadius: 2,
+                    background: "var(--surface2)",
+                    color: "var(--muted2)",
+                    cursor: "pointer",
+                    fontSize: 18,
+                    lineHeight: "18px",
                     flexShrink: 0,
                   }}
                 >
-                  {displayPct}% · ${spent.toFixed(2)} / ${Number(target.amount).toFixed(2)}
-                </div>
+                  ⋯
+                </button>
+              </div>
+
+              <div
+                style={{
+                  color: isOver ? "var(--red)" : "var(--muted2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  marginBottom: 8,
+                }}
+              >
+                {displayPct}% · ${spent.toFixed(2)} / ${Number(target.amount).toFixed(2)}
               </div>
 
               <div
@@ -334,6 +584,20 @@ export default function SpendingTargetsSection({
                 {target.period}
                 {startDate ? ` · from ${startDate.slice(0, 10)}` : ""}
               </div>
+
+              {expanded && (
+                <SpendingHistoryChart
+                  target={target}
+                  transactions={transactions}
+                  count={historyCount}
+                  onCountChange={(count) =>
+                    setHistoryCounts((prev) => ({
+                      ...prev,
+                      [target.id]: count,
+                    }))
+                  }
+                />
+              )}
             </div>
           );
         })}

@@ -56,12 +56,15 @@ def init_db():
         description TEXT,
         statement TEXT,
         account_id TEXT,
+        account_name TEXT,
         balance REAL
     )
 """)
 
     ensure_column(cursor, "saving_goals", "start_date", "TEXT")
+    ensure_column(cursor, "saving_goals", "account_id", "TEXT")
     ensure_column(cursor, "spending_targets", "start_date", "TEXT")
+    ensure_column(cursor, "transactions", "account_name", "TEXT")
 
     conn.commit()
     conn.close()
@@ -89,9 +92,9 @@ def ingest_transactions(transactions):
         cursor.execute("""
         INSERT OR IGNORE INTO transactions (
             id, date, amount, description,
-            category, statement, account_id, balance
+            category, statement, account_id, account_name, balance
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             txn_id,
             txn.get("date"),
@@ -100,6 +103,7 @@ def ingest_transactions(transactions):
             txn.get("category", ""),
             txn.get("statement", ""),
             txn.get("_account", ""),
+            txn.get("account_name", ""),
             txn.get("balance", 0),
         ))
 
@@ -122,6 +126,67 @@ def get_latest_transaction_date():
     conn.close()
 
     return row["latest_date"] if row else None
+
+
+def get_accounts():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            account_id,
+            COUNT(*) AS transaction_count,
+            MAX(date) AS latest_date
+        FROM transactions
+        WHERE account_id IS NOT NULL
+        AND account_id != ''
+        GROUP BY account_id
+        ORDER BY latest_date DESC
+    """)
+
+    accounts = []
+    for row in cursor.fetchall():
+        latest = get_latest_account_transaction(cursor, row["account_id"])
+        accounts.append({
+            "id": row["account_id"],
+            "name": (latest or {}).get("account_name") or row["account_id"],
+            "transaction_count": row["transaction_count"],
+            "latest_date": (latest or {}).get("date") or row["latest_date"],
+            "latest_balance": latest["balance"] if latest else None,
+        })
+
+    conn.close()
+    return accounts
+
+
+def get_account_transactions(account_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM transactions
+        WHERE account_id = ?
+        ORDER BY date DESC
+    """, (account_id,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_latest_account_transaction(cursor, account_id):
+    cursor.execute("""
+        SELECT balance, date, account_name
+        FROM transactions
+        WHERE account_id = ?
+        AND balance IS NOT NULL
+        ORDER BY date DESC
+        LIMIT 1
+    """, (account_id,))
+
+    row = cursor.fetchone()
+    return dict(row) if row else None
 
 
 # ---------------------------
@@ -226,7 +291,7 @@ def get_spending_targets():
 # SAVING GOALS
 # ---------------------------
 
-def create_saving_goal(name, target_amount, current_amount=0, start_date=None):
+def create_saving_goal(name, target_amount, current_amount=0, start_date=None, account_id=None):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -234,9 +299,9 @@ def create_saving_goal(name, target_amount, current_amount=0, start_date=None):
     start_date = start_date or today_iso()
 
     cursor.execute("""
-        INSERT INTO saving_goals (id, name, target_amount, current_amount, start_date)
-        VALUES (?, ?, ?, ?, ?)
-    """, (goal_id, name, target_amount, current_amount, start_date))
+        INSERT INTO saving_goals (id, name, target_amount, current_amount, start_date, account_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (goal_id, name, target_amount, current_amount, start_date, account_id))
 
     conn.commit()
     conn.close()
@@ -247,19 +312,20 @@ def create_saving_goal(name, target_amount, current_amount=0, start_date=None):
         "target_amount": target_amount,
         "current_amount": current_amount,
         "start_date": start_date,
+        "account_id": account_id,
     }
 
 
-def update_saving_goal(goal_id, name, target_amount, current_amount=0, start_date=None):
+def update_saving_goal(goal_id, name, target_amount, current_amount=0, start_date=None, account_id=None):
     conn = get_connection()
     cursor = conn.cursor()
     start_date = start_date or today_iso()
 
     cursor.execute("""
         UPDATE saving_goals
-        SET name = ?, target_amount = ?, current_amount = ?, start_date = ?
+        SET name = ?, target_amount = ?, current_amount = ?, start_date = ?, account_id = ?
         WHERE id = ?
-    """, (name, target_amount, current_amount, start_date, goal_id))
+    """, (name, target_amount, current_amount, start_date, account_id, goal_id))
 
     if cursor.rowcount == 0:
         conn.close()
@@ -274,6 +340,7 @@ def update_saving_goal(goal_id, name, target_amount, current_amount=0, start_dat
         "target_amount": target_amount,
         "current_amount": current_amount,
         "start_date": start_date,
+        "account_id": account_id,
     }
 
 
@@ -282,11 +349,26 @@ def get_saving_goals():
     cursor = conn.cursor()
 
     cursor.execute("SELECT * FROM saving_goals")
-    rows = cursor.fetchall()
+    goals = [dict(row) for row in cursor.fetchall()]
+
+    for goal in goals:
+        account_id = goal.get("account_id")
+        if not account_id:
+            continue
+
+        latest = get_latest_account_transaction(cursor, account_id)
+        if not latest:
+            continue
+
+        goal["account_name"] = latest.get("account_name") or account_id
+        goal["account_latest_date"] = latest.get("date")
+        goal["account_balance"] = latest.get("balance")
+        goal["manual_current_amount"] = goal.get("current_amount")
+        goal["current_amount"] = latest.get("balance") or 0
 
     conn.close()
 
-    return [dict(r) for r in rows]
+    return goals
 
 
 def get_spending_targets_with_progress():
