@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 
 import { API } from "@/api/constants";
@@ -15,7 +16,7 @@ const DEFAULT_FILTERS = {
   showUncategorised: true,
 };
 
-function TxRow({ txn, i, onEdit }) {
+function TxRow({ txn, i, onEdit, onAcceptCategory }) {
   const [hov, setHov] = useState(false);
 
   return (
@@ -63,7 +64,29 @@ function TxRow({ txn, i, onEdit }) {
           whiteSpace: "nowrap",
         }}
       >
-        {txn.category || "Add category"}
+        <span>{txn.category || "Add category"}</span>
+        {txn.category_status === "suggested" && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAcceptCategory(txn);
+            }}
+            title="Accept suggested category"
+            style={{
+              marginLeft: 6,
+              border: "none",
+              background: "var(--accent)",
+              color: "var(--bg)",
+              borderRadius: 2,
+              cursor: "pointer",
+              fontSize: 10,
+              padding: "1px 4px",
+            }}
+          >
+            ✓
+          </button>
+        )}
       </span>
 
       <span
@@ -128,14 +151,6 @@ function applySort(transactions, sortKey) {
   }
 }
 
-function mergeTransactions(existing, incoming) {
-  const byId = new Map(
-    [...(existing || []), ...(incoming || [])].map((txn) => [txn.id, txn])
-  );
-
-  return [...byId.values()];
-}
-
 export default function TransactionsTab() {
   const { data, setData, loading } = useApi("/api/transactions");
 
@@ -145,32 +160,41 @@ export default function TransactionsTab() {
   const [editingTxn, setEditingTxn] = useState(null);
   const [loadStartDate, setLoadStartDate] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [classifying, setClassifying] = useState(false);
+
+  const reloadTransactions = async () => {
+    const res = await fetch(`${API}/api/transactions`);
+    if (!res.ok) throw new Error("Failed to reload transactions");
+    const json = await res.json();
+    console.log("sample", json.slice(0, 5).map(t => ({ id: t.id, category: t.category, status: t.category_status })));
+    setData(json);
+  };
 
   const editTransaction = async (txn, field) => {
     const id = txn?.id;
-  
+
     if (!id) {
       console.warn("Skipping transaction with missing id:", txn);
       return;
     }
-  
+
     if (field === "category") {
       setEditingTxn(txn);
       return;
     }
-  
+
     const value = prompt("Edit description:", txn.description || "");
     if (value === null) return;
-  
+
     try {
       const res = await fetch(`${API}/api/transactions/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: value }),
       });
-  
+
       if (!res.ok) throw new Error("Failed to update transaction");
-  
+
       setData((prev) =>
         (prev || []).map((t) =>
           t.id === id ? { ...t, description: value } : t
@@ -193,9 +217,23 @@ export default function TransactionsTab() {
 
       if (!res.ok) throw new Error("Failed to update transaction");
 
+      const currentStatus = editingTxn.category_status;
+      const currentCategory = editingTxn.category || "";
+      const nextStatus =
+        currentStatus === "suggested"
+          ? newCategory === currentCategory ? "accepted" : "rejected"
+          : newCategory ? "accepted" : "unset";
+
       setData((prev) =>
         (prev || []).map((t) =>
-          t.id === editingTxn.id ? { ...t, category: newCategory } : t
+          t.id === editingTxn.id
+            ? {
+                ...t,
+                category: newCategory,
+                category_source: "human",
+                category_status: nextStatus,
+              }
+            : t
         )
       );
 
@@ -205,33 +243,42 @@ export default function TransactionsTab() {
     }
   };
 
-  const filtered = applySort(
-    applyFilters(data, search, filters),
-    sort
-  );
+  const acceptCategory = async (txn) => {
+    try {
+      const res = await fetch(`${API}/api/transactions/${txn.id}/category/accept`, {
+        method: "POST",
+      });
+
+      if (!res.ok) throw new Error("Failed to accept category");
+
+      setData((prev) =>
+        (prev || []).map((t) =>
+          t.id === txn.id ? { ...t, category_status: "accepted" } : t
+        )
+      );
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const handleLoadTransactions = async () => {
     if (!loadStartDate) {
       alert("Choose a start date first.");
       return;
     }
-  
+
     try {
       setSyncing(true);
 
       const res = await fetch(`${API}/api/transactions/load`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start_date: loadStartDate }),
       });
-  
+
       if (!res.ok) throw new Error("Failed to load transactions");
-  
-      const newTxns = await res.json();
-  
-      setData((prev) => mergeTransactions(prev, newTxns));
+
+      await reloadTransactions();
     } catch (err) {
       alert(err.message);
     } finally {
@@ -249,15 +296,36 @@ export default function TransactionsTab() {
 
       if (!res.ok) throw new Error(await res.text() || "Failed to refresh transactions");
 
-      const payload = await res.json();
-
-      setData((prev) => mergeTransactions(prev, payload.transactions || []));
+      await reloadTransactions();
     } catch (err) {
       alert(err.message);
     } finally {
       setSyncing(false);
     }
   };
+
+  const handleClassifyTransactions = async () => {
+    try {
+      setClassifying(true);
+
+      const res = await fetch(`${API}/api/transactions/classify`, {
+        method: "POST",
+      });
+
+      if (!res.ok) throw new Error("Failed to classify transactions");
+
+      await reloadTransactions();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setClassifying(false);
+    }
+  };
+
+  const filtered = applySort(
+    applyFilters(data, search, filters),
+    sort
+  );
 
   return (
     <div style={{
@@ -306,7 +374,7 @@ export default function TransactionsTab() {
         />
         <button
           onClick={handleLoadTransactions}
-          disabled={syncing}
+          disabled={syncing || classifying}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--border2)",
@@ -322,8 +390,25 @@ export default function TransactionsTab() {
           {syncing ? "Syncing..." : "+ Load"}
         </button>
         <button
+          onClick={handleClassifyTransactions}
+          disabled={classifying || syncing}
+          style={{
+            padding: "7px 12px",
+            border: "1px solid var(--border2)",
+            background: "var(--surface2)",
+            color: "var(--text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            borderRadius: 2,
+            cursor: classifying ? "not-allowed" : "pointer",
+            opacity: classifying ? 0.7 : 1,
+          }}
+        >
+          {classifying ? "Classifying..." : "Classify"}
+        </button>
+        <button
           onClick={handleRefreshTransactions}
-          disabled={syncing}
+          disabled={syncing || classifying}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--accent)",
@@ -378,6 +463,7 @@ export default function TransactionsTab() {
             txn={txn}
             i={i}
             onEdit={editTransaction}
+            onAcceptCategory={acceptCategory}
           />
         ))
       )}

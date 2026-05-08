@@ -14,6 +14,8 @@ from database import (
     get_account_transactions,
     get_transactions as get_transactions_from_db,
     set_transaction_category,
+    accept_transaction_category,
+    classify_unset_transactions,
     create_spending_target,
     update_spending_target,
     get_spending_targets_with_progress,
@@ -59,6 +61,10 @@ class TransactionUpdate(BaseModel):
 class LoadTransactionsRequest(BaseModel):
     start_date: str
     end_date: str | None = None
+
+
+class ClassifyTransactionsRequest(BaseModel):
+    limit: int | None = None
 
 
 class SpendingTargetCreate(BaseModel):
@@ -129,6 +135,14 @@ def get_transactions():
     return get_transactions_from_db()
 
 
+@app.post("/api/transactions/classify")
+def classify_transactions(req: ClassifyTransactionsRequest | None = None):
+    req = req or ClassifyTransactionsRequest()
+    return {
+        "classified": classify_unset_transactions(req.limit),
+    }
+
+
 @app.get("/api/accounts")
 def list_accounts():
     return get_accounts()
@@ -176,6 +190,14 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
             raise HTTPException(404, "Transaction not found")
 
     return {"message": "updated"}
+
+
+@app.post("/api/transactions/{transaction_id}/category/accept")
+def accept_transaction_classification(transaction_id: str):
+    if not accept_transaction_category(transaction_id, "user"):
+        raise HTTPException(404, "Suggested category not found")
+
+    return {"message": "accepted"}
 
 
 # ---------------------------
