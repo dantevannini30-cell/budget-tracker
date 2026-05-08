@@ -6,11 +6,10 @@ import {
   createSpendingTarget,
 } from "@/api/goals";
 
-export default function useSpendingTargets(
-  budgetId
-) {
+export default function useSpendingTargets(budgetId) {
   const [targets, setTargets] = useState([]);
   const [progress, setProgress] = useState({});
+  const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -20,26 +19,37 @@ export default function useSpendingTargets(
   });
 
   async function loadTargets() {
+    if (!budgetId) return;
+
     try {
-      const data = await getSpendingTargets(
-        budgetId
+      setLoading(true);
+
+      const data = await getSpendingTargets(budgetId);
+
+      setTargets(data || []);
+
+      const progressEntries = await Promise.all(
+        (data || [])
+          .filter((t) => t && (t.id || t._id)) // 👈 important guard
+          .map(async (target) => {
+            const id = target.id || target._id;
+
+            const p = await getSpendingTargetProgress(
+              budgetId,
+              id
+            );
+
+            return [id, p];
+          })
       );
 
-      setTargets(data);
-
-      const progressMap = {};
-
-      for (const target of data) {
-        progressMap[target.id] =
-          await getSpendingTargetProgress(
-            budgetId,
-            target.id
-          );
-      }
+      const progressMap = Object.fromEntries(progressEntries);
 
       setProgress(progressMap);
     } catch (err) {
-      console.error(err);
+      console.error("Failed loading targets:", err);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -81,5 +91,6 @@ export default function useSpendingTargets(
     setForm,
     handleSubmit,
     reloadTargets: loadTargets,
+    loading,
   };
 }

@@ -14,17 +14,12 @@ export async function getSpendingTargets(budgetId) {
   return res.json();
 }
 
-export async function createSpendingTarget(
-  budgetId,
-  payload
-) {
+export async function createSpendingTarget(budgetId, payload) {
   const res = await fetch(
     `${API}/api/budgets/${budgetId}/spending-targets`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }
   );
@@ -36,10 +31,12 @@ export async function createSpendingTarget(
   return res.json();
 }
 
-export async function getSpendingTargetProgress(
-  budgetId,
-  targetId
-) {
+export async function getSpendingTargetProgress(budgetId, targetId) {
+  if (!targetId) {
+    console.warn("Missing targetId in getSpendingTargetProgress");
+    return null;
+  }
+
   const res = await fetch(
     `${API}/api/budgets/${budgetId}/spending-targets/${targetId}/progress`
   );
@@ -65,17 +62,12 @@ export async function getSavingGoals(budgetId) {
   return res.json();
 }
 
-export async function createSavingGoal(
-  budgetId,
-  payload
-) {
+export async function createSavingGoal(budgetId, payload) {
   const res = await fetch(
     `${API}/api/budgets/${budgetId}/saving-goals`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }
   );
@@ -87,10 +79,7 @@ export async function createSavingGoal(
   return res.json();
 }
 
-export async function getSavingGoalProgress(
-  budgetId,
-  goalId
-) {
+export async function getSavingGoalProgress(budgetId, goalId) {
   const res = await fetch(
     `${API}/api/budgets/${budgetId}/saving-goals/${goalId}/progress`
   );

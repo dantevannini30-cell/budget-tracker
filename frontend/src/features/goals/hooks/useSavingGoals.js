@@ -2,13 +2,12 @@ import { useEffect, useState } from "react";
 
 import {
   getSpendingTargets,
-  createSpendingTarget,
   getSpendingTargetProgress,
+  createSpendingTarget,
 } from "@/api/goals";
 
 export default function useSavingGoals(budgetId) {
   const [goals, setGoals] = useState([]);
-  const [progress, setProgress] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState({
@@ -17,7 +16,6 @@ export default function useSavingGoals(budgetId) {
     current_amount: "",
   });
 
-  // Load goals + progress
   useEffect(() => {
     if (!budgetId) return;
 
@@ -27,15 +25,31 @@ export default function useSavingGoals(budgetId) {
       try {
         setLoading(true);
 
-        const [goalData, progressData] = await Promise.all([
-          getSpendingTargets(budgetId),
-          getSpendingTargetProgress(budgetId),
-        ]);
+        const data = await getSpendingTargets(budgetId);
+
+        const goalsWithProgress = await Promise.all(
+          (data || []).map(async (goal) => {
+            const id = goal.id ?? goal._id;
+
+            if (!id) {
+              return { ...goal, progress: null };
+            }
+
+            const progress = await getSpendingTargetProgress(
+              budgetId,
+              id
+            );
+
+            return {
+              ...goal,
+              progress,
+            };
+          })
+        );
 
         if (!active) return;
 
-        setGoals(goalData || []);
-        setProgress(progressData || []);
+        setGoals(goalsWithProgress);
       } catch (err) {
         console.error("Failed to load saving goals:", err);
       } finally {
@@ -50,21 +64,20 @@ export default function useSavingGoals(budgetId) {
     };
   }, [budgetId]);
 
-  // Create new goal
   const handleSubmit = async (e) => {
-    if (e?.preventDefault) e.preventDefault();
-
-    if (!budgetId) return;
+    e.preventDefault();
 
     try {
       const payload = {
-        budget_id: budgetId,
         name: form.name,
-        target_amount: parseFloat(form.target_amount),
-        current_amount: parseFloat(form.current_amount || 0),
+        target_amount: Number(form.target_amount),
+        current_amount: Number(form.current_amount || 0),
       };
 
-      const newGoal = await createSpendingTarget(payload);
+      const newGoal = await createSpendingTarget(
+        budgetId,
+        payload
+      );
 
       setGoals((prev) => [newGoal, ...prev]);
 
@@ -75,13 +88,11 @@ export default function useSavingGoals(budgetId) {
       });
     } catch (err) {
       console.error("Failed to create goal:", err);
-      alert(err.message);
     }
   };
 
   return {
     goals,
-    progress,
     form,
     setForm,
     handleSubmit,
