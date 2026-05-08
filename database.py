@@ -209,7 +209,7 @@ def get_spending_targets(budget_id):
 # ─────────────────────────────
 # SAVING GOALS
 # ─────────────────────────────
-def create_saving_goal(budget_id, name, target, by_date, start_balance):
+def create_saving_goal(budget_id, name, target_amount, by_date, current_amount):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -218,7 +218,7 @@ def create_saving_goal(budget_id, name, target, by_date, start_balance):
     cursor.execute("""
         INSERT INTO saving_goals (id, budget_id, name, target, by_date, start_balance)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (goal_id, budget_id, name, target, by_date, start_balance))
+    """, (goal_id, budget_id, name, target_amount, by_date, current_amount))
 
     conn.commit()
     conn.close()
@@ -227,9 +227,9 @@ def create_saving_goal(budget_id, name, target, by_date, start_balance):
         "id": goal_id,
         "budget_id": budget_id,
         "name": name,
-        "target": target,
+        "target_amount": target_amount,
         "by_date": by_date,
-        "start_balance": start_balance
+        "current_amount": current_amount
     }
 
 
@@ -241,6 +241,13 @@ def get_saving_goals(budget_id):
         SELECT * FROM saving_goals WHERE budget_id = ?
     """, (budget_id,))
 
-    goals = [dict(r) for r in cursor.fetchall()]
+    goals = []
+    for r in cursor.fetchall():
+        goal = dict(r)
+        # Map database fields to frontend field names
+        goal["target_amount"] = goal.pop("target")
+        goal["current_amount"] = goal.pop("start_balance")
+        goals.append(goal)
+
     conn.close()
     return goals

@@ -101,7 +101,7 @@ def calculate_saving_goal_progress(budget_id: str, goal_id: str):
 
     return {
         "target": target,
-        "current": round(current, 2),
+        "saved": round(current, 2),
         "remaining": round(target - current, 2),
         "pct": round((current / target) * 100, 1) if target else 0,
         "by_date": by_date

@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 
 import {
-  getSpendingTargets,
-  getSpendingTargetProgress,
-  createSpendingTarget,
+  getSavingGoals,
+  getSavingGoalProgress,
+  createSavingGoal,
 } from "@/api/goals";
 
 export default function useSavingGoals(budgetId) {
   const [goals, setGoals] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState({});
+  const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -16,86 +17,74 @@ export default function useSavingGoals(budgetId) {
     current_amount: "",
   });
 
-  useEffect(() => {
+  async function loadGoals() {
     if (!budgetId) return;
 
-    let active = true;
+    try {
+      setLoading(true);
 
-    async function load() {
-      try {
-        setLoading(true);
+      const data = await getSavingGoals(budgetId);
 
-        const data = await getSpendingTargets(budgetId);
+      setGoals(data || []);
 
-        const goalsWithProgress = await Promise.all(
-          (data || []).map(async (goal) => {
-            const id = goal.id ?? goal._id;
+      const progressEntries = await Promise.all(
+        (data || [])
+          .filter((g) => g && (g.id || g._id))
+          .map(async (goal) => {
+            const id = goal.id || goal._id;
 
-            if (!id) {
-              return { ...goal, progress: null };
-            }
-
-            const progress = await getSpendingTargetProgress(
+            const p = await getSavingGoalProgress(
               budgetId,
               id
             );
 
-            return {
-              ...goal,
-              progress,
-            };
+            return [id, p];
           })
-        );
+      );
 
-        if (!active) return;
+      const progressMap = Object.fromEntries(progressEntries);
 
-        setGoals(goalsWithProgress);
-      } catch (err) {
-        console.error("Failed to load saving goals:", err);
-      } finally {
-        if (active) setLoading(false);
-      }
+      setProgress(progressMap);
+    } catch (err) {
+      console.error("Failed loading goals:", err);
+    } finally {
+      setLoading(false);
     }
+  }
 
-    load();
-
-    return () => {
-      active = false;
-    };
+  useEffect(() => {
+    loadGoals();
   }, [budgetId]);
 
-  const handleSubmit = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault();
 
     try {
-      const payload = {
+      await createSavingGoal(budgetId, {
         name: form.name,
         target_amount: Number(form.target_amount),
         current_amount: Number(form.current_amount || 0),
-      };
-
-      const newGoal = await createSpendingTarget(
-        budgetId,
-        payload
-      );
-
-      setGoals((prev) => [newGoal, ...prev]);
+      });
 
       setForm({
         name: "",
         target_amount: "",
         current_amount: "",
       });
+
+      loadGoals();
     } catch (err) {
-      console.error("Failed to create goal:", err);
+      console.error(err);
     }
-  };
+  }
 
   return {
     goals,
+    progress,
     form,
     setForm,
     handleSubmit,
+    reloadGoals: loadGoals,
     loading,
   };
 }

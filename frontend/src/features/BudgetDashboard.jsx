@@ -181,13 +181,24 @@ export default function BudgetDashboard({ budgetId, onClearBudget }) {
   if (!summary) return null;
 
   const { start_date, created_at, transaction_count, summary: stats } = summary;
-  const all = stats.all;
-  const lastWeek = stats.last_week;
+  const rawStats = stats?.all ?? stats ?? summary;
+  const all = {
+    total_in: rawStats.total_in ?? 0,
+    total_out: rawStats.total_out ?? 0,
+    net: rawStats.net ?? 0,
+    total_balance: rawStats.total_balance ?? ((rawStats.total_in ?? 0) - (rawStats.total_out ?? 0)),
+  };
+
+  const weekTxns = getLastWeekTransactions();
+  const lastWeek = stats?.last_week ?? rawStats.last_week ?? {
+    total_in: weekTxns.filter(t => t.amount > 0).reduce((sum, t) => sum + t.amount, 0),
+    total_out: weekTxns.filter(t => t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0),
+    net: weekTxns.filter(t => t.amount > 0).reduce((sum, t) => sum + t.amount, 0) - weekTxns.filter(t => t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0),
+  };
   const totalBalance = all.total_balance;
 
   const allCatsIncome = calculateCategoryTotals(transactions, true);
   const allCatsExpense = calculateCategoryTotals(transactions, false);
-  const weekTxns = getLastWeekTransactions();
   const weekCatsIncome = calculateCategoryTotals(weekTxns, true);
   const weekCatsExpense = calculateCategoryTotals(weekTxns, false);
   const filteredTransactions = applySort(applyFilters(transactions, search, filters), sort);

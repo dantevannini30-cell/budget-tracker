@@ -64,9 +64,8 @@ class SpendingTargetCreate(BaseModel):
 
 class SavingGoalCreate(BaseModel):
     name: str
-    target: float
-    by_date: str | None = None
-    start_balance: float | None = None
+    target_amount: float
+    current_amount: float | None = None
 
 
 # ---------------------------
@@ -307,22 +306,22 @@ def add_goal(budget_id: str, goal: SavingGoalCreate):
     conn = get_connection()
     cursor = conn.cursor()
 
-    if goal.start_balance is None:
+    if goal.current_amount is None:
         cursor.execute("SELECT balances FROM budgets WHERE id = ?", (budget_id,))
         row = cursor.fetchone()
         balances = json.loads(row["balances"]) if row and row["balances"] else {}
-        start_balance = sum(balances.values())
+        current_amount = sum(balances.values())
     else:
-        start_balance = goal.start_balance
+        current_amount = goal.current_amount
 
     conn.close()
 
     return create_saving_goal(
         budget_id,
         goal.name,
-        goal.target,
-        goal.by_date,
-        start_balance,
+        goal.target_amount,
+        None,  # by_date not used in frontend
+        current_amount,
     )
 
 

@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { api } from "@/shared/api/client";
+import { API } from "@/api/constants";
 
 export default function useApi(endpoint) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${api}${endpoint}`)
+    fetch(`${API}${endpoint}`)
       .then((r) => r.json())
       .then((d) => {
         setData(d);
