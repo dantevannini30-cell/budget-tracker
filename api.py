@@ -226,12 +226,12 @@ def by_category():
     cursor.execute("""
         SELECT
             COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
-            SUM(ABS(t.amount)) AS total
+            SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE t.amount < 0
         GROUP BY 1
+        HAVING total > 0
         ORDER BY total DESC
     """)
 
@@ -254,12 +254,12 @@ def by_category_income():
     cursor.execute("""
         SELECT
             COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
-            SUM(ABS(t.amount)) AS total
+            SUM(t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE t.amount > 0
         GROUP BY 1
+        HAVING total > 0
         ORDER BY total DESC
     """)
 
@@ -362,11 +362,11 @@ def summary(start_date: str = None, end_date: str = None):
     query = """
         SELECT
             COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
-            SUM(ABS(t.amount)) AS total
+            SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE t.amount < 0
+        WHERE 1 = 1
     """
 
     params = []
@@ -379,7 +379,7 @@ def summary(start_date: str = None, end_date: str = None):
         query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY 1 ORDER BY total DESC"
+    query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
     rows = [dict(r) for r in cursor.fetchall()]
@@ -408,11 +408,11 @@ def dashboard(
     query = """
         SELECT
             COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
-            SUM(ABS(t.amount)) AS total
+            SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE t.amount < 0
+        WHERE 1 = 1
     """
 
     params = []
@@ -425,7 +425,7 @@ def dashboard(
         query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY 1 ORDER BY total DESC"
+    query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
     summary = [dict(r) for r in cursor.fetchall()]
@@ -438,17 +438,28 @@ def dashboard(
     # ---------------------------
     # INCOME SUMMARY
     # ---------------------------
-    cursor.execute("""
+    income_query = """
         SELECT
             COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
-            SUM(ABS(t.amount)) AS total
+            SUM(t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE t.amount > 0
-        GROUP BY 1
-        ORDER BY total DESC
-    """)
+        WHERE 1 = 1
+    """
+    income_params = []
+
+    if start_date:
+        income_query += " AND t.date >= ?"
+        income_params.append(start_date)
+
+    if end_date:
+        income_query += " AND t.date <= ?"
+        income_params.append(end_date)
+
+    income_query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
+
+    cursor.execute(income_query, income_params)
 
     income_summary = [dict(r) for r in cursor.fetchall()]
 
