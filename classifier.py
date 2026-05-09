@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 # change the import at the top — add the two new db helpers
@@ -7,7 +8,7 @@ from database import get_known_categories, get_similar_examples
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "5"))
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
 
 SYSTEM_PROMPT = """
 You classify personal finance transactions into concise budget categories.
@@ -93,6 +94,10 @@ def classify_transaction(txn):
     payload = {
         "model": model,
         "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 40,
+        },
         "messages": [
             {
                 "role": "system",
@@ -193,6 +198,7 @@ def build_user_prompt(statement, txn, context):
 
 def call_ollama(payload, statement, txn, context, model):
     print(f"[classifier] POST {OLLAMA_URL}")
+    started_at = time.monotonic()
     request = urllib.request.Request(
         OLLAMA_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -212,6 +218,8 @@ def call_ollama(payload, statement, txn, context, model):
 
         raise
 
+    elapsed = time.monotonic() - started_at
+    print(f"[classifier] response in {elapsed:.1f}s")
     return data["message"]["content"]
 
 
@@ -223,9 +231,14 @@ def call_ollama_generate(statement, txn, context, model):
         "system": SYSTEM_PROMPT,
         "prompt": build_user_prompt(statement, txn, context),
         "format": "json",
+        "options": {
+            "temperature": 0,
+            "num_predict": 40,
+        },
     }
 
     print(f"[classifier] fallback POST {generate_url}")
+    started_at = time.monotonic()
     request = urllib.request.Request(
         generate_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -241,6 +254,8 @@ def call_ollama_generate(statement, txn, context, model):
         print(f"[classifier] generate HTTP {err.code}: {body}")
         raise
 
+    elapsed = time.monotonic() - started_at
+    print(f"[classifier] fallback response in {elapsed:.1f}s")
     return data["response"]
 
 
@@ -296,4 +311,3 @@ def run_test_suite(limit=10):
 
 if __name__ == "__main__":
     run_test_suite(10)
-

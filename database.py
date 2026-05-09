@@ -10,6 +10,7 @@ import os
 from transaction_identity import get_external_transaction_id, get_transaction_id
 
 DB_FILE = "transactions.db"
+DEFAULT_CLASSIFICATION_BATCH_SIZE = 10
 
 
 # ---------------------------
@@ -410,7 +411,7 @@ def accept_transaction_category(transaction_id, updated_by="user"):
         cursor,
         transaction_id,
         row["category"],
-        "classifier",
+        "human",
         "accepted",
         updated_by,
     )
@@ -420,56 +421,33 @@ def accept_transaction_category(transaction_id, updated_by="user"):
     return True
 
 
-def classify_unset_transactions(limit=None):
-    from classifier import classify_transaction, is_classifier_available
-
-    print(f"[classifier] classify_unset_transactions start limit={limit}")
-
-    if not is_classifier_available():
-        print("[classifier] abort: Ollama is not available")
-        return []
-
+def accept_all_suggested_transaction_categories(updated_by="user"):
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = """
-        SELECT t.*
-        FROM transactions t
-        LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
-        WHERE COALESCE(c.status, 'unset') = 'unset'
-        ORDER BY t.date DESC
-    """
-    params = []
+    cursor.execute("""
+        UPDATE transaction_classifications
+        SET
+            source = 'human',
+            status = 'accepted',
+            updated_at = ?,
+            updated_by = ?
+        WHERE source = 'classifier'
+        AND status = 'suggested'
+        AND category IS NOT NULL
+        AND category != ''
+    """, (now_iso(), updated_by))
 
-    if limit:
-        query += " LIMIT ?"
-        params.append(limit)
-
-    cursor.execute(query, params)
-    rows = [dict(row) for row in cursor.fetchall()]
+    accepted_count = cursor.rowcount
+    conn.commit()
     conn.close()
+    return accepted_count
 
-    print(f"[classifier] found {len(rows)} unset transactions")
 
-    # classify all rows with no DB connection open
-    results = []
-    for row in rows:
-        category = classify_transaction(row)
-        if not category:
-            print(f"[classifier] no category suggested for {row['id']}")
-            continue
-        results.append({
-            "id": row["id"],
-            "category": category,
-        })
-        print(f"[classifier] suggested {row['id']} -> {category!r}")
-
+def write_classifier_batch(results):
     if not results:
-        print("[classifier] done classified=0")
-        return []
+        return
 
-    # single write pass
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -485,6 +463,73 @@ def classify_unset_transactions(limit=None):
 
     conn.commit()
     conn.close()
+
+
+def classify_unset_transactions(limit=None, batch_size=DEFAULT_CLASSIFICATION_BATCH_SIZE):
+    from classifier import classify_transaction, is_classifier_available
+
+    print(f"[classifier] classify_unset_transactions start limit={limit} batch_size={batch_size}")
+
+    if not is_classifier_available():
+        print("[classifier] abort: Ollama is not available")
+        return []
+
+    batch_size = batch_size or DEFAULT_CLASSIFICATION_BATCH_SIZE
+    batch_size = max(1, int(batch_size))
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT t.*
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE COALESCE(c.status, 'unset') = 'unset'
+        OR c.source = 'classifier'
+        ORDER BY t.date DESC
+    """
+    params = []
+
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    cursor.execute(query, params)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    print(f"[classifier] found {len(rows)} transactions to classify")
+
+    results = []
+    batch = []
+
+    for row in rows:
+        category = classify_transaction(row)
+        if not category:
+            print(f"[classifier] no category suggested for {row['id']}")
+            continue
+
+        result = {
+            "id": row["id"],
+            "category": category,
+        }
+        results.append(result)
+        batch.append(result)
+        print(f"[classifier] suggested {row['id']} -> {category!r}")
+
+        if len(batch) >= batch_size:
+            write_classifier_batch(batch)
+            print(f"[classifier] wrote batch size={len(batch)}")
+            batch = []
+
+    if batch:
+        write_classifier_batch(batch)
+        print(f"[classifier] wrote batch size={len(batch)}")
+
+    if not results:
+        print("[classifier] done classified=0")
+        return []
 
     print(f"[classifier] done classified={len(results)}")
     return results

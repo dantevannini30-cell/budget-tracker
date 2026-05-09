@@ -81,7 +81,20 @@ export default function FilterDropdown({
     !filters.showOut,
     !filters.showCategorised,
     !filters.showUncategorised,
+    !filters.showHumanClassified,
+    !filters.showBotClassified,
+    !filters.showUnclassified,
   ].filter(Boolean).length;
+
+  const resetFilters = {
+    showIn: true,
+    showOut: true,
+    showCategorised: true,
+    showUncategorised: true,
+    showHumanClassified: true,
+    showBotClassified: true,
+    showUnclassified: true,
+  };
 
   return (
     <div style={{ position: "relative" }}>
@@ -114,10 +127,15 @@ export default function FilterDropdown({
             <div style={{ padding: "8px 14px 4px", fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted)" }}>Category</div>
             <FilterItem label="Categorised" checked={filters.showCategorised} onToggle={() => onChange({ ...filters, showCategorised: !filters.showCategorised })} />
             <FilterItem label="Uncategorised" checked={filters.showUncategorised} onToggle={() => onChange({ ...filters, showUncategorised: !filters.showUncategorised })} />
+            <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />
+            <div style={{ padding: "8px 14px 4px", fontFamily: "var(--font-mono)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--muted)" }}>Classified by</div>
+            <FilterItem label="Human" checked={filters.showHumanClassified} onToggle={() => onChange({ ...filters, showHumanClassified: !filters.showHumanClassified })} />
+            <FilterItem label="Bot" checked={filters.showBotClassified} onToggle={() => onChange({ ...filters, showBotClassified: !filters.showBotClassified })} />
+            <FilterItem label="Unclassified" checked={filters.showUnclassified} onToggle={() => onChange({ ...filters, showUnclassified: !filters.showUnclassified })} />
             {activeCount > 0 && (
               <>
                 <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />
-                <div onClick={() => { onChange({ showIn: true, showOut: true, showCategorised: true, showUncategorised: true }); setOpen(false); }}
+                <div onClick={() => { onChange(resetFilters); setOpen(false); }}
                   style={{ padding: "9px 14px", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", cursor: "pointer" }}
                   onMouseEnter={e => e.currentTarget.style.background = "var(--surface2)"}
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}

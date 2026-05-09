@@ -14,6 +14,9 @@ const DEFAULT_FILTERS = {
   showOut: true,
   showCategorised: true,
   showUncategorised: true,
+  showHumanClassified: true,
+  showBotClassified: true,
+  showUnclassified: true,
 };
 
 function TxRow({ txn, i, onEdit, onAcceptCategory }) {
@@ -130,6 +133,15 @@ function applyFilters(transactions, search, filters) {
     if (t.category && !filters.showCategorised) return false;
     if (!t.category && !filters.showUncategorised) return false;
 
+    const source = t.category_source || "unset";
+    const isHumanClassified = source === "human" || source === "legacy";
+    const isBotClassified = source === "classifier";
+    const isUnclassified = source === "unset" || !t.category;
+
+    if (isHumanClassified && !filters.showHumanClassified) return false;
+    if (isBotClassified && !filters.showBotClassified) return false;
+    if (isUnclassified && !filters.showUnclassified) return false;
+
     return true;
   });
 }
@@ -161,6 +173,7 @@ export default function TransactionsTab() {
   const [loadStartDate, setLoadStartDate] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [classifying, setClassifying] = useState(false);
+  const [acceptingAll, setAcceptingAll] = useState(false);
 
   const reloadTransactions = async () => {
     const res = await fetch(`${API}/api/transactions`);
@@ -253,11 +266,36 @@ export default function TransactionsTab() {
 
       setData((prev) =>
         (prev || []).map((t) =>
-          t.id === txn.id ? { ...t, category_status: "accepted" } : t
+          t.id === txn.id
+            ? { ...t, category_source: "human", category_status: "accepted" }
+            : t
         )
       );
     } catch (err) {
       alert(err.message);
+    }
+  };
+
+  const acceptAllSuggestedCategories = async () => {
+    try {
+      setAcceptingAll(true);
+
+      const res = await fetch(`${API}/api/transactions/category/accept-suggested`, {
+        method: "POST",
+      });
+
+      if (!res.ok) throw new Error("Failed to accept suggested categories");
+
+      const json = await res.json();
+      if (Array.isArray(json.transactions)) {
+        setData(json.transactions);
+      } else {
+        await reloadTransactions();
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setAcceptingAll(false);
     }
   };
 
@@ -314,7 +352,12 @@ export default function TransactionsTab() {
 
       if (!res.ok) throw new Error("Failed to classify transactions");
 
-      await reloadTransactions();
+      const json = await res.json();
+      if (Array.isArray(json.transactions)) {
+        setData(json.transactions);
+      } else {
+        await reloadTransactions();
+      }
     } catch (err) {
       alert(err.message);
     } finally {
@@ -326,6 +369,10 @@ export default function TransactionsTab() {
     applyFilters(data, search, filters),
     sort
   );
+  const suggestedCount = (data || []).filter(
+    (txn) => txn.category_status === "suggested" && txn.category
+  ).length;
+  const busy = syncing || classifying || acceptingAll;
 
   return (
     <div style={{
@@ -374,7 +421,7 @@ export default function TransactionsTab() {
         />
         <button
           onClick={handleLoadTransactions}
-          disabled={syncing || classifying}
+          disabled={busy}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--border2)",
@@ -383,15 +430,15 @@ export default function TransactionsTab() {
             fontFamily: "var(--font-mono)",
             fontSize: 12,
             borderRadius: 2,
-            cursor: syncing ? "not-allowed" : "pointer",
-            opacity: syncing ? 0.7 : 1,
+            cursor: busy ? "not-allowed" : "pointer",
+            opacity: busy ? 0.7 : 1,
           }}
         >
           {syncing ? "Syncing..." : "+ Load"}
         </button>
         <button
           onClick={handleClassifyTransactions}
-          disabled={classifying || syncing}
+          disabled={busy}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--border2)",
@@ -400,15 +447,32 @@ export default function TransactionsTab() {
             fontFamily: "var(--font-mono)",
             fontSize: 12,
             borderRadius: 2,
-            cursor: classifying ? "not-allowed" : "pointer",
-            opacity: classifying ? 0.7 : 1,
+            cursor: busy ? "not-allowed" : "pointer",
+            opacity: busy ? 0.7 : 1,
           }}
         >
           {classifying ? "Classifying..." : "Classify"}
         </button>
         <button
+          onClick={acceptAllSuggestedCategories}
+          disabled={busy || suggestedCount === 0}
+          style={{
+            padding: "7px 12px",
+            border: "1px solid var(--border2)",
+            background: "var(--surface2)",
+            color: "var(--text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            borderRadius: 2,
+            cursor: busy || suggestedCount === 0 ? "not-allowed" : "pointer",
+            opacity: busy || suggestedCount === 0 ? 0.7 : 1,
+          }}
+        >
+          {acceptingAll ? "Accepting..." : `Accept all (${suggestedCount})`}
+        </button>
+        <button
           onClick={handleRefreshTransactions}
-          disabled={syncing || classifying}
+          disabled={busy}
           style={{
             padding: "7px 12px",
             border: "1px solid var(--accent)",
@@ -417,8 +481,8 @@ export default function TransactionsTab() {
             fontFamily: "var(--font-mono)",
             fontSize: 12,
             borderRadius: 2,
-            cursor: syncing ? "not-allowed" : "pointer",
-            opacity: syncing ? 0.7 : 1,
+            cursor: busy ? "not-allowed" : "pointer",
+            opacity: busy ? 0.7 : 1,
           }}
         >
           Refresh
