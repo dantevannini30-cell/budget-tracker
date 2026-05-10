@@ -19,8 +19,39 @@ const DEFAULT_FILTERS = {
   showUnclassified: true,
 };
 
-function TxRow({ txn, i, onEdit, onAcceptCategory }) {
+function TxRow({ txn, i, onEditCategory, onUpdateDescription, onAcceptCategory }) {
   const [hov, setHov] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(txn.description || "");
+  const [savingDescription, setSavingDescription] = useState(false);
+
+  const startDescriptionEdit = () => {
+    setDescriptionDraft(txn.description || "");
+    setEditingDescription(true);
+  };
+
+  const cancelDescriptionEdit = () => {
+    setDescriptionDraft(txn.description || "");
+    setEditingDescription(false);
+  };
+
+  const saveDescription = async () => {
+    const nextDescription = descriptionDraft.trim();
+    const currentDescription = txn.description || "";
+
+    if (nextDescription === currentDescription) {
+      setEditingDescription(false);
+      return;
+    }
+
+    try {
+      setSavingDescription(true);
+      await onUpdateDescription(txn, nextDescription);
+      setEditingDescription(false);
+    } finally {
+      setSavingDescription(false);
+    }
+  };
 
   return (
     <div
@@ -52,7 +83,7 @@ function TxRow({ txn, i, onEdit, onAcceptCategory }) {
       </span>
 
       <span
-        onClick={() => onEdit(txn, "category")}
+        onClick={() => onEditCategory(txn)}
         style={{
           fontSize: 12,
           fontFamily: "var(--font-mono)",
@@ -92,22 +123,54 @@ function TxRow({ txn, i, onEdit, onAcceptCategory }) {
         )}
       </span>
 
-      <span
-        onClick={() => onEdit(txn, "description")}
-        style={{
-          fontSize: 12,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          cursor: "pointer",
-          padding: "4px 6px",
-          borderRadius: 3,
-          background: "var(--surface)",
-          border: "1px solid var(--border2)",
-        }}
-      >
-        {txn.description || <span style={{ color: "var(--muted2)" }}>Add description</span>}
-      </span>
+      {editingDescription ? (
+        <input
+          autoFocus
+          value={descriptionDraft}
+          disabled={savingDescription}
+          onChange={(e) => setDescriptionDraft(e.target.value)}
+          onBlur={saveDescription}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              cancelDescriptionEdit();
+            }
+          }}
+          style={{
+            minWidth: 0,
+            width: "100%",
+            fontSize: 12,
+            color: "var(--text)",
+            padding: "4px 6px",
+            borderRadius: 3,
+            background: "var(--surface2)",
+            border: "1px solid var(--accent)",
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={startDescriptionEdit}
+          style={{
+            minWidth: 0,
+            fontSize: 12,
+            color: txn.description ? "var(--text)" : "var(--muted2)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            cursor: "text",
+            padding: "4px 6px",
+            borderRadius: 3,
+            background: "var(--surface)",
+            border: "1px solid var(--border2)",
+            textAlign: "left",
+          }}
+        >
+          {savingDescription ? "Saving..." : txn.description || "Add description"}
+        </button>
+      )}
 
       <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>
         {txn.statement || "—"}
@@ -183,7 +246,7 @@ export default function TransactionsTab() {
     setData(json);
   };
 
-  const editTransaction = async (txn, field) => {
+  const editCategory = (txn) => {
     const id = txn?.id;
 
     if (!id) {
@@ -191,30 +254,34 @@ export default function TransactionsTab() {
       return;
     }
 
-    if (field === "category") {
-      setEditingTxn(txn);
+    setEditingTxn(txn);
+  };
+
+  const updateDescription = async (txn, description) => {
+    const id = txn?.id;
+
+    if (!id) {
+      console.warn("Skipping transaction with missing id:", txn);
       return;
     }
-
-    const value = prompt("Edit description:", txn.description || "");
-    if (value === null) return;
 
     try {
       const res = await fetch(`${API}/api/transactions/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: value }),
+        body: JSON.stringify({ description }),
       });
 
       if (!res.ok) throw new Error("Failed to update transaction");
 
       setData((prev) =>
         (prev || []).map((t) =>
-          t.id === id ? { ...t, description: value } : t
+          t.id === id ? { ...t, description } : t
         )
       );
     } catch (err) {
       alert(err.message);
+      throw err;
     }
   };
 
@@ -526,7 +593,8 @@ export default function TransactionsTab() {
             key={txn.id}
             txn={txn}
             i={i}
-            onEdit={editTransaction}
+            onEditCategory={editCategory}
+            onUpdateDescription={updateDescription}
             onAcceptCategory={acceptCategory}
           />
         ))

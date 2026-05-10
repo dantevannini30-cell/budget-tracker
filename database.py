@@ -1067,7 +1067,7 @@ def get_categories_with_recurring():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
             COUNT(*) AS transaction_count,
             COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) AS expense_total,
             COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS income_total,
@@ -1080,10 +1080,10 @@ def get_categories_with_recurring():
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
         LEFT JOIN recurring_rules r
-            ON r.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
+            ON r.category = COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised')
             AND COALESCE(r.statement_match, '') = ''
         LEFT JOIN category_settings s
-            ON s.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
+            ON s.category = COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised')
         GROUP BY 1
         ORDER BY category COLLATE NOCASE ASC
     """)
@@ -1193,7 +1193,7 @@ def get_category_summary(category):
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
             COUNT(*) AS transaction_count,
             COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) AS expense_total,
             COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS income_total,
@@ -1206,11 +1206,11 @@ def get_category_summary(category):
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
         LEFT JOIN recurring_rules r
-            ON r.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
+            ON r.category = COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised')
             AND COALESCE(r.statement_match, '') = ''
         LEFT JOIN category_settings s
-            ON s.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
-        WHERE COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+            ON s.category = COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised')
+        WHERE COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') = ?
         GROUP BY 1
     """, (category,))
 
@@ -1313,13 +1313,13 @@ def get_category_transactions(category):
             t.account_id,
             t.account_name,
             t.balance,
-            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
             COALESCE(c.source, 'unset') AS category_source,
             COALESCE(c.status, 'unset') AS category_status
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
-        WHERE COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+        WHERE COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') = ?
         ORDER BY t.date DESC
     """, (category,))
 
@@ -1796,13 +1796,13 @@ def get_linked_debt_payments(cursor, debt):
             t.date AS payment_date,
             t.statement,
             t.description,
-            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category
         FROM transactions t
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
         WHERE t.amount < 0
         AND t.date >= ?
-        AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+        AND COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') = ?
         ORDER BY t.date DESC
     """, (debt.get("start_date") or today_iso(), category))
 
@@ -1934,7 +1934,7 @@ def get_linked_debt_payment_total_at_date(cursor, debt, end_date):
         WHERE t.amount < 0
         AND t.date >= ?
         AND t.date <= ?
-        AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+        AND COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') = ?
     """, (
         debt.get("start_date") or today_iso(),
         f"{end_date}T23:59:59",
@@ -1980,7 +1980,7 @@ def get_period_income(cursor, income_categories, start_date, end_date):
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
         WHERE t.amount > 0
-        AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') IN ({placeholders})
+        AND COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') IN ({placeholders})
         AND t.date >= ?
         AND t.date <= ?
     """, income_categories + [start_date, end_of_day])
@@ -1996,7 +1996,7 @@ def get_period_non_recurring_spending(cursor, recurring_categories, start_date, 
     if recurring_categories:
         placeholders = ",".join(["?"] * len(recurring_categories))
         recurring_filter = f"""
-            AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') NOT IN ({placeholders})
+            AND COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') NOT IN ({placeholders})
         """
         params.extend(recurring_categories)
 
@@ -2026,7 +2026,7 @@ def get_period_expenses_for_categories(cursor, categories, start_date, end_date)
         LEFT JOIN transaction_classifications c
             ON c.transaction_id = t.id
         WHERE t.amount < 0
-        AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') IN ({placeholders})
+        AND COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') IN ({placeholders})
         AND t.date >= ?
         AND t.date <= ?
     """, categories + [start_date, end_of_day])
