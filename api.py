@@ -12,6 +12,11 @@ from database import (
     get_latest_transaction_date,
     get_accounts,
     get_account_transactions,
+    get_transactions as get_transactions_from_db,
+    set_transaction_category,
+    accept_transaction_category,
+    accept_all_suggested_transaction_categories,
+    classify_unset_transactions,
     create_spending_target,
     update_spending_target,
     get_spending_targets_with_progress,
@@ -57,6 +62,11 @@ class TransactionUpdate(BaseModel):
 class LoadTransactionsRequest(BaseModel):
     start_date: str
     end_date: str | None = None
+
+
+class ClassifyTransactionsRequest(BaseModel):
+    limit: int | None = None
+    batch_size: int | None = None
 
 
 class SpendingTargetCreate(BaseModel):
@@ -124,20 +134,17 @@ def refresh_transactions():
 
 @app.get("/api/transactions")
 def get_transactions():
-    conn = get_connection()
-    cursor = conn.cursor()
+    return get_transactions_from_db()
 
-    cursor.execute("""
-        SELECT *
-        FROM transactions
-        WHERE LOWER(COALESCE(statement, description)) NOT LIKE '%transfer%'
-        ORDER BY date DESC
-    """)
 
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-
-    return rows
+@app.post("/api/transactions/classify")
+def classify_transactions(req: ClassifyTransactionsRequest | None = None):
+    req = req or ClassifyTransactionsRequest()
+    classified = classify_unset_transactions(req.limit, req.batch_size)
+    return {
+        "classified": classified,
+        "transactions": get_transactions_from_db(),
+    }
 
 
 @app.get("/api/accounts")
@@ -158,34 +165,52 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
     updates = []
     params = []
 
-    if update.category is not None:
-        updates.append("category = ?")
-        params.append(update.category)
-
     if update.description is not None:
         updates.append("description = ?")
         params.append(update.description)
 
-    if not updates:
+    if update.category is None and not updates:
         raise HTTPException(400, "No update provided")
 
-    query = f"""
-        UPDATE transactions
-        SET {', '.join(updates)}
-        WHERE id = ?
-    """
+    if updates:
+        query = f"""
+            UPDATE transactions
+            SET {', '.join(updates)}
+            WHERE id = ?
+        """
 
-    params.append(transaction_id)
+        params.append(transaction_id)
 
-    cursor.execute(query, params)
+        cursor.execute(query, params)
 
-    if cursor.rowcount == 0:
-        raise HTTPException(404, "Transaction not found")
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "Transaction not found")
 
-    conn.commit()
+        conn.commit()
     conn.close()
 
+    if update.category is not None:
+        if not set_transaction_category(transaction_id, update.category, "human", "user"):
+            raise HTTPException(404, "Transaction not found")
+
     return {"message": "updated"}
+
+
+@app.post("/api/transactions/{transaction_id}/category/accept")
+def accept_transaction_classification(transaction_id: str):
+    if not accept_transaction_category(transaction_id, "user"):
+        raise HTTPException(404, "Suggested category not found")
+
+    return {"message": "accepted"}
+
+
+@app.post("/api/transactions/category/accept-suggested")
+def accept_suggested_transaction_classifications():
+    accepted_count = accept_all_suggested_transaction_categories("user")
+    return {
+        "accepted": accepted_count,
+        "transactions": get_transactions_from_db(),
+    }
 
 
 # ---------------------------
@@ -200,11 +225,13 @@ def by_category():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(-t.amount) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        GROUP BY 1
+        HAVING total > 0
         ORDER BY total DESC
     """)
 
@@ -226,11 +253,13 @@ def by_category_income():
 
     cursor.execute("""
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount > 0
-        GROUP BY category
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(t.amount) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        GROUP BY 1
+        HAVING total > 0
         ORDER BY total DESC
     """)
 
@@ -332,23 +361,25 @@ def summary(start_date: str = None, end_date: str = None):
 
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(-t.amount) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE 1 = 1
     """
 
     params = []
 
     if start_date:
-        query += " AND date >= ?"
+        query += " AND t.date >= ?"
         params.append(start_date)
 
     if end_date:
-        query += " AND date <= ?"
+        query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY category ORDER BY total DESC"
+    query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
     rows = [dict(r) for r in cursor.fetchall()]
@@ -376,23 +407,25 @@ def dashboard(
     # ---------------------------
     query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount < 0
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(-t.amount) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE 1 = 1
     """
 
     params = []
 
     if start_date:
-        query += " AND date >= ?"
+        query += " AND t.date >= ?"
         params.append(start_date)
 
     if end_date:
-        query += " AND date <= ?"
+        query += " AND t.date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY category ORDER BY total DESC"
+    query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
     summary = [dict(r) for r in cursor.fetchall()]
@@ -405,15 +438,28 @@ def dashboard(
     # ---------------------------
     # INCOME SUMMARY
     # ---------------------------
-    cursor.execute("""
+    income_query = """
         SELECT
-            COALESCE(NULLIF(category, ''), 'Uncategorised') AS category,
-            SUM(ABS(amount)) AS total
-        FROM transactions
-        WHERE amount > 0
-        GROUP BY category
-        ORDER BY total DESC
-    """)
+            COALESCE(NULLIF(c.category, ''), NULLIF(t.category, ''), 'Uncategorised') AS category,
+            SUM(t.amount) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE 1 = 1
+    """
+    income_params = []
+
+    if start_date:
+        income_query += " AND t.date >= ?"
+        income_params.append(start_date)
+
+    if end_date:
+        income_query += " AND t.date <= ?"
+        income_params.append(end_date)
+
+    income_query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
+
+    cursor.execute(income_query, income_params)
 
     income_summary = [dict(r) for r in cursor.fetchall()]
 

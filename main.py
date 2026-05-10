@@ -105,7 +105,7 @@ def fetch_in_range(start_date, end_date):
             account_id, account_name = extract_account_info(txn)
 
             flat = {
-                "id": txn.get("id"),
+                "id": txn.get("id") or txn.get("_id"),
                 "date": txn.get("date"),
                 "amount": txn.get("amount"),
                 "description": txn.get("description", ""),

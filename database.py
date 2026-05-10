@@ -1,8 +1,16 @@
 import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
+import json
+import math
+import urllib.request
+import urllib.error
+import os
+
+from transaction_identity import get_external_transaction_id, get_transaction_id
 
 DB_FILE = "transactions.db"
+DEFAULT_CLASSIFICATION_BATCH_SIZE = 10
 
 
 # ---------------------------
@@ -61,11 +69,25 @@ def init_db():
     )
 """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_classifications (
+            transaction_id TEXT PRIMARY KEY,
+            category TEXT,
+            source TEXT,
+            status TEXT,
+            updated_at TEXT,
+            updated_by TEXT
+        )
+    """)
+
     ensure_column(cursor, "saving_goals", "start_date", "TEXT")
     ensure_column(cursor, "saving_goals", "account_id", "TEXT")
     ensure_column(cursor, "spending_targets", "start_date", "TEXT")
     ensure_column(cursor, "transactions", "account_name", "TEXT")
+    ensure_column(cursor, "transaction_classifications", "status", "TEXT")
 
+    backfill_transaction_classifications(cursor)
+    backfill_classification_status(cursor)
     conn.commit()
     conn.close()
 
@@ -78,16 +100,101 @@ def ensure_column(cursor, table_name, column_name, column_type):
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
+def now_iso():
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def backfill_transaction_classifications(cursor):
+    cursor.execute("""
+        INSERT OR IGNORE INTO transaction_classifications (
+            transaction_id, category, source, status, updated_at, updated_by
+        )
+        SELECT
+            id,
+            COALESCE(category, ''),
+            CASE
+                WHEN category IS NULL OR category = '' THEN 'unset'
+                ELSE 'legacy'
+            END,
+            CASE
+                WHEN category IS NULL OR category = '' THEN 'unset'
+                ELSE 'accepted'
+            END,
+            ?,
+            NULL
+        FROM transactions
+    """, (now_iso(),))
+
+
+def backfill_classification_status(cursor):
+    cursor.execute("""
+        UPDATE transaction_classifications
+        SET status = CASE
+            WHEN source = 'unset' THEN 'unset'
+            WHEN source = 'classifier' THEN 'suggested'
+            WHEN source IN ('human', 'legacy') THEN 'accepted'
+            ELSE 'unset'
+        END
+        WHERE status IS NULL
+        OR status = ''
+    """)
+
+
+def upsert_transaction_classification(
+    cursor,
+    transaction_id,
+    category="",
+    source="unset",
+    status="unset",
+    updated_by=None,
+):
+    cursor.execute("""
+        INSERT INTO transaction_classifications (
+            transaction_id, category, source, status, updated_at, updated_by
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(transaction_id) DO UPDATE SET
+            category = excluded.category,
+            source = excluded.source,
+            status = excluded.status,
+            updated_at = excluded.updated_at,
+            updated_by = excluded.updated_by
+    """, (
+        transaction_id,
+        category or "",
+        source,
+        status,
+        now_iso(),
+        updated_by,
+    ))
+
+
 def ingest_transactions(transactions):
     conn = get_connection()
     cursor = conn.cursor()
     inserted_ids = []
 
     for txn in transactions:
-        txn_id = txn.get("id")
+        external_txn_id = get_external_transaction_id(txn)
+        txn_id = get_transaction_id(txn)
 
-        if not txn_id:
-            txn_id = uuid.uuid4().hex
+        if not external_txn_id:
+            cursor.execute("""
+                SELECT id
+                FROM transactions
+                WHERE date = ?
+                AND amount = ?
+                AND statement = ?
+                AND COALESCE(account_id, '') = ?
+                LIMIT 1
+            """, (
+                txn.get("date"),
+                txn.get("amount"),
+                txn.get("statement", ""),
+                txn.get("_account", ""),
+            ))
+            if cursor.fetchone():
+                continue
 
         cursor.execute("""
         INSERT OR IGNORE INTO transactions (
@@ -109,6 +216,14 @@ def ingest_transactions(transactions):
 
         if cursor.rowcount:
             inserted_ids.append(txn_id)
+            upsert_transaction_classification(
+                cursor,
+                txn_id,
+                txn.get("category", ""),
+                "classifier" if txn.get("category") else "unset",
+                "suggested" if txn.get("category") else "unset",
+                "classifier" if txn.get("category") else None,
+            )
         else:
             cursor.execute("""
                 UPDATE transactions
@@ -184,16 +299,240 @@ def get_account_transactions(account_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT *
-        FROM transactions
-        WHERE account_id = ?
-        ORDER BY date DESC
+        SELECT
+            t.*,
+            COALESCE(NULLIF(c.category, ''), t.category, '') AS category,
+            COALESCE(c.source, 'unset') AS category_source,
+            COALESCE(c.status, 'unset') AS category_status,
+            c.updated_at AS category_updated_at,
+            c.updated_by AS category_updated_by
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.account_id = ?
+        ORDER BY t.date DESC
     """, (account_id,))
 
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
 
+
+def get_transactions():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT
+        t.id,
+        t.amount,
+        t.date,
+        t.description,
+        t.statement,
+        t.account_id,
+        t.account_name,
+        t.balance,
+        COALESCE(NULLIF(c.category, ''), t.category, '') AS category,
+        COALESCE(c.source, 'unset') AS category_source,
+        COALESCE(c.status, 'unset') AS category_status,
+        c.updated_at AS category_updated_at,
+        c.updated_by AS category_updated_by
+    FROM transactions t
+    LEFT JOIN transaction_classifications c
+        ON c.transaction_id = t.id
+    WHERE LOWER(COALESCE(t.statement, t.description)) NOT LIKE '%transfer%'
+    ORDER BY t.date DESC
+""")
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def set_transaction_category(transaction_id, category, source="human", updated_by="user"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            t.id,
+            COALESCE(c.category, '') AS current_category,
+            COALESCE(c.status, 'unset') AS current_status
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.id = ?
+    """, (transaction_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    current_category = row["current_category"] or ""
+    current_status = row["current_status"] or "unset"
+    normalized_category = category or ""
+
+    if current_status == "suggested":
+        status = "accepted" if normalized_category == current_category else "rejected"
+    else:
+        status = "accepted" if normalized_category else "unset"
+
+    upsert_transaction_classification(
+        cursor,
+        transaction_id,
+        normalized_category,
+        source,
+        status,
+        updated_by,
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def accept_transaction_category(transaction_id, updated_by="user"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT category
+        FROM transaction_classifications
+        WHERE transaction_id = ?
+        AND category IS NOT NULL
+        AND category != ''
+    """, (transaction_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return False
+
+    upsert_transaction_classification(
+        cursor,
+        transaction_id,
+        row["category"],
+        "human",
+        "accepted",
+        updated_by,
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def accept_all_suggested_transaction_categories(updated_by="user"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE transaction_classifications
+        SET
+            source = 'human',
+            status = 'accepted',
+            updated_at = ?,
+            updated_by = ?
+        WHERE source = 'classifier'
+        AND status = 'suggested'
+        AND category IS NOT NULL
+        AND category != ''
+    """, (now_iso(), updated_by))
+
+    accepted_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return accepted_count
+
+
+def write_classifier_batch(results):
+    if not results:
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    for r in results:
+        upsert_transaction_classification(
+            cursor,
+            r["id"],
+            r["category"],
+            "classifier",
+            "suggested",
+            "classifier",
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def classify_unset_transactions(limit=None, batch_size=DEFAULT_CLASSIFICATION_BATCH_SIZE):
+    from classifier import classify_transaction, is_classifier_available
+
+    print(f"[classifier] classify_unset_transactions start limit={limit} batch_size={batch_size}")
+
+    if not is_classifier_available():
+        print("[classifier] abort: Ollama is not available")
+        return []
+
+    batch_size = batch_size or DEFAULT_CLASSIFICATION_BATCH_SIZE
+    batch_size = max(1, int(batch_size))
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT t.*
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE COALESCE(c.status, 'unset') = 'unset'
+        OR c.source = 'classifier'
+        ORDER BY t.date DESC
+    """
+    params = []
+
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    cursor.execute(query, params)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    print(f"[classifier] found {len(rows)} transactions to classify")
+
+    results = []
+    batch = []
+
+    for row in rows:
+        category = classify_transaction(row)
+        if not category:
+            print(f"[classifier] no category suggested for {row['id']}")
+            continue
+
+        result = {
+            "id": row["id"],
+            "category": category,
+        }
+        results.append(result)
+        batch.append(result)
+        print(f"[classifier] suggested {row['id']} -> {category!r}")
+
+        if len(batch) >= batch_size:
+            write_classifier_batch(batch)
+            print(f"[classifier] wrote batch size={len(batch)}")
+            batch = []
+
+    if batch:
+        write_classifier_batch(batch)
+        print(f"[classifier] wrote batch size={len(batch)}")
+
+    if not results:
+        print("[classifier] done classified=0")
+        return []
+
+    print(f"[classifier] done classified={len(results)}")
+    return results
 
 def get_latest_account_transaction(cursor, account_id):
     cursor.execute("""
@@ -440,11 +779,13 @@ def get_spent_for_categories(cursor, categories, start_date):
 
     placeholders = ",".join(["?"] * len(categories))
     cursor.execute(f"""
-        SELECT COALESCE(SUM(ABS(amount)), 0) AS spent
-        FROM transactions
-        WHERE amount < 0
-        AND category IN ({placeholders})
-        AND date >= ?
+        SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
+        AND COALESCE(NULLIF(c.category, ''), t.category, '') IN ({placeholders})
+        AND t.date >= ?
     """, categories + [start_date])
 
     return cursor.fetchone()["spent"] or 0
@@ -509,3 +850,175 @@ def days_in_month(year, month):
         return 31
 
     return (date(year, month + 1, 1) - timedelta(days=1)).day
+
+
+def get_known_categories(limit=50):
+    """Return distinct accepted category names, most frequently used first."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT category, COUNT(*) AS cnt
+        FROM transaction_classifications
+        WHERE status = 'accepted'
+          AND category IS NOT NULL
+          AND category != ''
+        GROUP BY category
+        ORDER BY cnt DESC
+        LIMIT ?
+    """, (limit,))
+
+    categories = [row["category"] for row in cursor.fetchall()]
+    conn.close()
+    return categories
+
+
+EMBED_MODEL = "nomic-embed-text:latest"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
+EMBED_URL = OLLAMA_URL.replace("/api/chat", "/api/embeddings").replace("/api/generate", "/api/embeddings")
+OLLAMA_TIMEOUT_SECONDS = 60
+
+def init_embeddings_db():
+    import sqlite3
+    conn = sqlite3.connect("embeddings.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_embeddings (
+            transaction_id TEXT PRIMARY KEY,
+            statement TEXT,
+            embedding TEXT,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_cached_embedding(transaction_id):
+    import sqlite3
+    try:
+        conn = sqlite3.connect("embeddings.db")
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT embedding FROM transaction_embeddings WHERE transaction_id = ?",
+            (transaction_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row["embedding"])
+    except Exception as err:
+        print(f"[embeddings] cache read failed: {err}")
+    return None
+
+
+def save_embedding(transaction_id, statement, embedding):
+    import sqlite3
+    from datetime import datetime, timezone
+    try:
+        conn = sqlite3.connect("embeddings.db")
+        conn.execute("""
+            INSERT OR REPLACE INTO transaction_embeddings
+                (transaction_id, statement, embedding, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (
+            transaction_id,
+            statement,
+            json.dumps(embedding),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as err:
+        print(f"[embeddings] cache write failed: {err}")
+
+
+def get_embedding(text, transaction_id=None):
+    if transaction_id:
+        cached = get_cached_embedding(transaction_id)
+        if cached:
+            print(f"[embeddings] cache hit {transaction_id}")
+            return cached
+
+    payload = {"model": EMBED_MODEL, "prompt": text}
+    request = urllib.request.Request(
+        EMBED_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    embedding = data["embedding"]
+
+    if transaction_id:
+        save_embedding(transaction_id, text, embedding)
+        print(f"[embeddings] cached {transaction_id}")
+
+    return embedding
+
+
+def cosine_similarity(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if not norm_a or not norm_b:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def get_similar_examples(statement, transaction_id=None, amount=None, limit=5):
+    from database import get_connection
+    init_embeddings_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            t.id,
+            t.statement,
+            t.description,
+            t.amount,
+            t.date,
+            c.category
+        FROM transactions t
+        JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE c.status = 'accepted'
+          AND c.category IS NOT NULL
+          AND c.category != ''
+        ORDER BY t.date DESC
+    """)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    if not rows:
+        print("[embeddings] no accepted transactions to compare against")
+        return []
+
+    try:
+        query_vec = get_embedding(statement, transaction_id=transaction_id)
+
+        scored = []
+        for row in rows:
+            candidate_text = row["statement"] or row["description"] or ""
+            if not candidate_text:
+                continue
+            candidate_vec = get_embedding(candidate_text, transaction_id=row["id"])
+            score = cosine_similarity(query_vec, candidate_vec)
+            scored.append((score, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [row for _, row in scored[:limit]]
+        print(f"[embeddings] top match score={scored[0][0]:.3f} category={scored[0][1]['category']!r}")
+
+    except Exception as err:
+        print(f"[embeddings] failed, falling back to recency: {err}")
+        top = rows[:limit]
+
+    return [
+        {
+            "statement": row["statement"] or row["description"] or "",
+            "amount": row["amount"],
+            "date": row["date"],
+            "category": row["category"],
+        }
+        for row in top
+    ]
