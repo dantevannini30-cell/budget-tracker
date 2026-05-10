@@ -106,6 +106,14 @@ def init_db():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS account_settings (
+            account_id TEXT PRIMARY KEY,
+            display_name TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS debts (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -152,6 +160,8 @@ def init_db():
     ensure_column(cursor, "category_settings", "is_recurring_expense", "INTEGER DEFAULT 0")
     ensure_column(cursor, "category_settings", "is_income", "INTEGER DEFAULT 0")
     ensure_column(cursor, "category_settings", "updated_at", "TEXT")
+    ensure_column(cursor, "account_settings", "display_name", "TEXT")
+    ensure_column(cursor, "account_settings", "updated_at", "TEXT")
     ensure_column(cursor, "debts", "category", "TEXT")
     ensure_column(cursor, "debts", "start_date", "TEXT")
     ensure_column(cursor, "debts", "active", "INTEGER DEFAULT 1")
@@ -355,9 +365,18 @@ def get_accounts():
     accounts = []
     for row in cursor.fetchall():
         latest = get_latest_account_transaction(cursor, row["account_id"])
+        cursor.execute("""
+            SELECT display_name
+            FROM account_settings
+            WHERE account_id = ?
+        """, (row["account_id"],))
+        settings = cursor.fetchone()
+        display_name = settings["display_name"] if settings else None
+
         accounts.append({
             "id": row["account_id"],
-            "name": (latest or {}).get("account_name") or row["account_id"],
+            "name": display_name or (latest or {}).get("account_name") or row["account_id"],
+            "source_name": (latest or {}).get("account_name") or row["account_id"],
             "transaction_count": row["transaction_count"],
             "latest_date": (latest or {}).get("date") or row["latest_date"],
             "latest_balance": latest["balance"] if latest else None,
@@ -365,6 +384,43 @@ def get_accounts():
 
     conn.close()
     return accounts
+
+
+def update_account_name(account_id, display_name):
+    account_id = (account_id or "").strip()
+    display_name = (display_name or "").strip()
+
+    if not account_id:
+        return None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 1
+        FROM transactions
+        WHERE account_id = ?
+        LIMIT 1
+    """, (account_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return None
+
+    cursor.execute("""
+        INSERT INTO account_settings (account_id, display_name, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            updated_at = excluded.updated_at
+    """, (account_id, display_name, now_iso()))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": account_id,
+        "name": display_name or account_id,
+    }
 
 
 def get_account_transactions(account_id):

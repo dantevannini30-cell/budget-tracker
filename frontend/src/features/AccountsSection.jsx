@@ -9,7 +9,35 @@ function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
 
-function AccountTile({ account }) {
+function AccountTile({ account, onRename }) {
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(account.name || account.id);
+  const [saving, setSaving] = useState(false);
+
+  const cancelEdit = () => {
+    setDraftName(account.name || account.id);
+    setEditing(false);
+  };
+
+  const saveName = async () => {
+    const nextName = draftName.trim();
+    const currentName = account.name || account.id;
+
+    if (!nextName || nextName === currentName) {
+      setDraftName(currentName);
+      setEditing(false);
+      return;
+    }
+
+    try {
+      setSaving(true);
+      await onRename(account.id, nextName);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -20,21 +48,65 @@ function AccountTile({ account }) {
         minWidth: 0,
       }}
     >
-      <div
-        style={{
-          color: "var(--muted2)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          marginBottom: 10,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {account.name || account.id}
-      </div>
+      {editing ? (
+        <input
+          autoFocus
+          value={draftName}
+          disabled={saving}
+          onChange={(e) => setDraftName(e.target.value)}
+          onBlur={saveName}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              cancelEdit();
+            }
+          }}
+          style={{
+            width: "100%",
+            color: "var(--text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            marginBottom: 10,
+            background: "var(--surface)",
+            border: "1px solid var(--accent)",
+            borderRadius: 3,
+            padding: "4px 6px",
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setDraftName(account.name || account.id);
+            setEditing(true);
+          }}
+          title={account.source_name && account.source_name !== account.name ? `Original: ${account.source_name}` : "Rename account"}
+          style={{
+            display: "block",
+            width: "100%",
+            color: "var(--muted2)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            marginBottom: 10,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: "text",
+            textAlign: "left",
+          }}
+        >
+          {saving ? "Saving..." : account.name || account.id}
+        </button>
+      )}
       <div
         style={{
           color: "var(--accent)",
@@ -99,6 +171,30 @@ export default function AccountsSection() {
     0
   );
 
+  const renameAccount = async (accountId, name) => {
+    try {
+      const res = await fetch(`${API}/api/accounts/${encodeURIComponent(accountId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+
+      if (!res.ok) throw new Error(await res.text() || "Failed to rename account");
+
+      const updated = await res.json();
+      setAccounts((prev) =>
+        prev.map((account) =>
+          account.id === accountId
+            ? { ...account, name: updated.name || name }
+            : account
+        )
+      );
+    } catch (err) {
+      alert(err.message);
+      throw err;
+    }
+  };
+
   return (
     <div style={{ display: "grid", gap: 18 }}>
       <SectionShell
@@ -126,7 +222,11 @@ export default function AccountsSection() {
             }}
           >
             {accounts.map((account) => (
-              <AccountTile key={account.id} account={account} />
+              <AccountTile
+                key={account.id}
+                account={account}
+                onRename={renameAccount}
+              />
             ))}
           </div>
         )}
