@@ -4,6 +4,9 @@ import { API } from "@/api/constants";
 import SpendingOverviewSection from "./SpendingOverviewSection";
 import SpendingTargetsSection from "./goals/SpendingTargetsSection";
 import SavingGoalsSection from "./goals/SavingGoalsSection";
+import NetWorthProjectionSection from "./NetWorthProjectionSection";
+import DebtsSection from "./debts/DebtsSection";
+import RecurringCashflowSection from "./RecurringCashflowSection";
 
 export default function Dashboard() {
   // Initialize with last week by default
@@ -57,8 +60,14 @@ export default function Dashboard() {
         onDateChange={handleDateChange}
       />
 
+      <RecurringCashflowSection />
+
+      <NetWorthProjectionSection />
+
       {/* Spending Targets Section */}
       <SpendingTargetsSection transactions={allTransactions} />
+
+      <DebtsSection transactions={allTransactions} />
 
       {/* Saving Goals Section */}
       <SavingGoalsSection />

@@ -24,6 +24,26 @@ from database import (
     create_saving_goal,
     update_saving_goal,
     get_saving_goals,
+    create_recurring_rule,
+    update_recurring_rule,
+    delete_recurring_rule,
+    get_recurring_rules,
+    get_categories_with_recurring,
+    get_category_transactions,
+    get_net_worth_projection,
+    set_category_income,
+    set_category_recurring,
+    get_recurring_cashflow_history,
+    create_debt,
+    update_debt,
+    delete_debt,
+    get_debts,
+    create_debt_payment,
+    delete_debt_payment,
+    create_category_allocation,
+    delete_category_allocation,
+    get_category_allocations,
+    apply_allocations_to_category_totals,
 )
 
 from utils import (
@@ -84,6 +104,49 @@ class SavingGoalCreate(BaseModel):
     current_amount: float = 0
     start_date: str | None = None
     account_id: str | None = None
+
+
+class RecurringRuleCreate(BaseModel):
+    name: str
+    type: str = "expense"
+    period: str = "monthly"
+    category: str | None = None
+    statement_match: str | None = None
+    amount: float | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class CategoryRecurringUpdate(BaseModel):
+    category: str
+    active: bool
+
+
+class CategoryIncomeUpdate(BaseModel):
+    category: str
+    active: bool
+
+
+class DebtCreate(BaseModel):
+    name: str
+    initial_amount: float
+    category: str | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class DebtPaymentCreate(BaseModel):
+    amount: float
+    payment_date: str | None = None
+    note: str | None = None
+
+
+class TransactionAllocationCreate(BaseModel):
+    from_category: str
+    to_category: str
+    amount: float
+    allocation_date: str | None = None
+    note: str | None = None
 
 
 # ---------------------------
@@ -239,12 +302,7 @@ def by_category():
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    total = sum(r["total"] for r in rows)
-
-    for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
-
-    return rows
+    return apply_allocations_to_category_totals(rows)
 
 
 @app.get("/api/summary/by-category/income")
@@ -359,7 +417,7 @@ def goal_progress(goal_id: str):
 def goal_account_history(
     goal_id: str,
     period: str = Query("weekly"),
-    count: int = Query(8, ge=1, le=60),
+    count: int = Query(8, ge=1, le=260),
 ):
     if period not in {"weekly", "monthly", "yearly"}:
         raise HTTPException(400, "Period must be weekly, monthly, or yearly")
@@ -397,6 +455,229 @@ def goal_account_history(
     }
 
 
+# ---------------------------
+# RECURRING RULES
+# ---------------------------
+
+def validate_recurring_rule(rule: RecurringRuleCreate):
+    if rule.type not in {"expense", "income"}:
+        raise HTTPException(400, "Type must be expense or income")
+
+    if rule.period not in {"weekly", "fortnightly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, fortnightly, monthly, or yearly")
+
+    if not (rule.category or rule.statement_match):
+        raise HTTPException(400, "Choose a category or statement match")
+
+
+@app.get("/api/recurring-rules")
+def list_recurring_rules(active_only: bool = Query(False)):
+    return get_recurring_rules(active_only)
+
+
+@app.post("/api/recurring-rules")
+def create_recurring(rule: RecurringRuleCreate):
+    validate_recurring_rule(rule)
+    return create_recurring_rule(
+        rule.name,
+        rule.type,
+        rule.period,
+        rule.category,
+        rule.statement_match,
+        rule.amount,
+        rule.start_date,
+        rule.active,
+    )
+
+
+@app.put("/api/recurring-rules/{rule_id}")
+def update_recurring(rule_id: str, rule: RecurringRuleCreate):
+    validate_recurring_rule(rule)
+    updated = update_recurring_rule(
+        rule_id,
+        rule.name,
+        rule.type,
+        rule.period,
+        rule.category,
+        rule.statement_match,
+        rule.amount,
+        rule.start_date,
+        rule.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Recurring rule not found")
+
+    return updated
+
+
+@app.delete("/api/recurring-rules/{rule_id}")
+def remove_recurring(rule_id: str):
+    if not delete_recurring_rule(rule_id):
+        raise HTTPException(404, "Recurring rule not found")
+
+    return {"message": "deleted"}
+
+
+# ---------------------------
+# CATEGORIES
+# ---------------------------
+
+@app.get("/api/categories")
+def list_categories():
+    return get_categories_with_recurring()
+
+
+@app.get("/api/categories/{category}/transactions")
+def list_category_transactions(category: str):
+    return get_category_transactions(category)
+
+
+@app.put("/api/categories/recurring")
+def update_category_recurring(update: CategoryRecurringUpdate):
+    category = set_category_recurring(update.category, update.active)
+
+    if not category:
+        raise HTTPException(404, "Category not found")
+
+    return category
+
+
+@app.put("/api/categories/income")
+def update_category_income(update: CategoryIncomeUpdate):
+    category = set_category_income(update.category, update.active)
+
+    if not category:
+        raise HTTPException(404, "Category not found")
+
+    return category
+
+
+@app.get("/api/net-worth/projection")
+def net_worth_projection(
+    period: str = Query("monthly"),
+    history_count: int = Query(52, ge=1, le=261),
+    future_count: int = Query(52, ge=1, le=261),
+):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, monthly, or yearly")
+
+    return get_net_worth_projection(period, history_count, future_count)
+
+
+@app.get("/api/recurring-cashflow/history")
+def recurring_cashflow_history(
+    period: str = Query("monthly"),
+    count: int = Query(12, ge=1, le=60),
+):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, monthly, or yearly")
+
+    return get_recurring_cashflow_history(period, count)
+
+
+# ---------------------------
+# DEBTS
+# ---------------------------
+
+@app.get("/api/debts")
+def list_debts(active_only: bool = Query(False)):
+    return get_debts(active_only)
+
+
+@app.post("/api/debts")
+def create_debt_endpoint(debt: DebtCreate):
+    return create_debt(
+        debt.name,
+        debt.initial_amount,
+        debt.category,
+        debt.start_date,
+        debt.active,
+    )
+
+
+@app.put("/api/debts/{debt_id}")
+def update_debt_endpoint(debt_id: str, debt: DebtCreate):
+    updated = update_debt(
+        debt_id,
+        debt.name,
+        debt.initial_amount,
+        debt.category,
+        debt.start_date,
+        debt.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Debt not found")
+
+    return updated
+
+
+@app.delete("/api/debts/{debt_id}")
+def delete_debt_endpoint(debt_id: str):
+    if not delete_debt(debt_id):
+        raise HTTPException(404, "Debt not found")
+
+    return {"message": "deleted"}
+
+
+@app.post("/api/debts/{debt_id}/payments")
+def create_debt_payment_endpoint(debt_id: str, payment: DebtPaymentCreate):
+    debt = create_debt_payment(
+        debt_id,
+        payment.amount,
+        payment.payment_date,
+        payment.note,
+    )
+
+    if not debt:
+        raise HTTPException(404, "Debt not found")
+
+    return debt
+
+
+@app.delete("/api/debts/{debt_id}/payments/{payment_id}")
+def delete_debt_payment_endpoint(debt_id: str, payment_id: str):
+    if not delete_debt_payment(debt_id, payment_id):
+        raise HTTPException(404, "Debt payment not found")
+
+    debt = get_debts()
+    return {"message": "deleted", "debts": debt}
+
+
+# ---------------------------
+# ALLOCATIONS
+# ---------------------------
+
+@app.get("/api/allocations")
+def list_allocations():
+    return get_category_allocations()
+
+
+@app.post("/api/allocations")
+def create_allocation(allocation: TransactionAllocationCreate):
+    created = create_category_allocation(
+        allocation.from_category,
+        allocation.to_category,
+        allocation.amount,
+        allocation.allocation_date,
+        allocation.note,
+    )
+
+    if not created:
+        raise HTTPException(400, "Could not create allocation")
+
+    return created
+
+
+@app.delete("/api/allocations/{allocation_id}")
+def delete_allocation(allocation_id: str):
+    if not delete_category_allocation(allocation_id):
+        raise HTTPException(404, "Allocation not found")
+
+    return {"message": "deleted"}
+
+
 @app.get("/api/summary")
 def summary(start_date: str = None, end_date: str = None):
     conn = get_connection()
@@ -429,12 +710,7 @@ def summary(start_date: str = None, end_date: str = None):
 
     conn.close()
 
-    total = sum(r["total"] for r in rows)
-
-    for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
-
-    return rows
+    return apply_allocations_to_category_totals(rows, start_date, end_date)
 
 
 @app.get("/api/dashboard")
@@ -471,12 +747,11 @@ def dashboard(
     query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
-    summary = [dict(r) for r in cursor.fetchall()]
-
-    total_spent = sum(r["total"] for r in summary)
-
-    for r in summary:
-        r["pct"] = round((r["total"] / total_spent) * 100, 1) if total_spent else 0
+    summary = apply_allocations_to_category_totals(
+        [dict(r) for r in cursor.fetchall()],
+        start_date,
+        end_date,
+    )
 
     # ---------------------------
     # INCOME SUMMARY
@@ -518,12 +793,20 @@ def dashboard(
     # ---------------------------
     spending_targets = get_spending_targets_with_progress()
     saving_goals = get_saving_goals()
+    recurring_rules = get_recurring_rules()
+    recurring_expense_categories = [
+        category["category"]
+        for category in get_categories_with_recurring()
+        if category.get("is_recurring")
+    ]
 
     return {
         "summary": summary,
         "income_summary": income_summary,
         "spending_targets": spending_targets,
         "saving_goals": saving_goals,
+        "recurring_rules": recurring_rules,
+        "recurring_expense_categories": recurring_expense_categories,
         "date_range": {
             "start_date": start_date,
             "end_date": end_date,
