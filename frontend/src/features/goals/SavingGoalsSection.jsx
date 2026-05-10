@@ -1,6 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import useSavingGoals from "./hooks/useSavingGoals";
+import { getSavingGoalAccountHistory } from "@/api/goals";
 
 import {
   cardStyle,
@@ -9,8 +19,58 @@ import {
 } from "@/shared/styles/ui";
 
 const HISTORY_COUNTS = [4, 8, 12, 24];
+const HISTORY_PERIODS = [
+  { value: "weekly", label: "Weeks" },
+  { value: "monthly", label: "Months" },
+  { value: "yearly", label: "Years" },
+];
 
-function SavingHistoryPanel({ count, onCountChange }) {
+function SavingHistoryPanel({
+  goal,
+  count,
+  period,
+  onCountChange,
+  onPeriodChange,
+}) {
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHistory() {
+      if (!goal.account_id) {
+        setHistory([]);
+        return;
+      }
+
+      try {
+        setLoadingHistory(true);
+        const data = await getSavingGoalAccountHistory(goal.id, { period, count });
+        if (!cancelled) setHistory(data.points || []);
+      } catch (err) {
+        console.error("Failed loading saving goal account history:", err);
+        if (!cancelled) setHistory([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    }
+
+    loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [count, goal.account_id, goal.id, period]);
+
+  const chartData = history
+    .filter((point) => point.balance !== null && point.balance !== undefined)
+    .map((point) => ({
+      ...point,
+      balance: Number(point.balance),
+    }));
+  const hasAccount = Boolean(goal.account_id);
+
   return (
     <div
       style={{
@@ -36,44 +96,136 @@ function SavingHistoryPanel({ count, onCountChange }) {
             textTransform: "uppercase",
           }}
         >
-          Progress history
+          Account value history
         </div>
 
-        <select
-          value={count}
-          onChange={(e) => onCountChange(Number(e.target.value))}
+        <div
+          onClick={(e) => e.stopPropagation()}
           style={{
-            ...inputStyle,
-            padding: "5px 8px",
-            width: 88,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
           }}
         >
-          {HISTORY_COUNTS.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+          <select
+            value={period}
+            onChange={(e) => onPeriodChange(e.target.value)}
+            style={{
+              ...inputStyle,
+              padding: "5px 8px",
+              width: 102,
+            }}
+          >
+            {HISTORY_PERIODS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={count}
+            onChange={(e) => onCountChange(Number(e.target.value))}
+            style={{
+              ...inputStyle,
+              padding: "5px 8px",
+              width: 88,
+            }}
+          >
+            {HISTORY_COUNTS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      <div
-        style={{
-          height: 140,
-          border: "1px solid var(--border2)",
-          background: "var(--surface2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 20,
-          color: "var(--muted2)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
-          textAlign: "center",
-        }}
-      >
-        Saving goals only store the current amount right now. Add dated saving
-        updates to chart progress over time.
-      </div>
+      {!hasAccount || (!loadingHistory && chartData.length === 0) ? (
+        <div
+          style={{
+            height: 150,
+            border: "1px solid var(--border2)",
+            background: "var(--surface2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            color: "var(--muted2)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            textAlign: "center",
+          }}
+        >
+          {hasAccount
+            ? "No balance history found for this account yet."
+            : "Link this goal to an account to chart its value over time."}
+        </div>
+      ) : (
+        <div
+          style={{
+            height: 180,
+            border: "1px solid var(--border2)",
+            background: "var(--surface2)",
+            padding: "14px 8px 8px",
+          }}
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
+              <XAxis
+                dataKey="label"
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+                tick={{
+                  fill: "#6b7a96",
+                  fontSize: 10,
+                  fontFamily: "DM Mono",
+                }}
+              />
+              <YAxis
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
+                width={56}
+                tick={{
+                  fill: "#6b7a96",
+                  fontSize: 10,
+                  fontFamily: "DM Mono",
+                }}
+              />
+              <Tooltip
+                formatter={(value) => [`$${Number(value).toFixed(2)}`, "Balance"]}
+                labelFormatter={(_, payload) => {
+                  const point = payload?.[0]?.payload;
+                  return point?.balance_date || point?.label || "";
+                }}
+                contentStyle={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 2,
+                  color: "var(--text)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                }}
+              />
+              <Line
+                type="monotone"
+                dataKey="balance"
+                stroke="var(--accent)"
+                strokeWidth={2}
+                dot={{ r: 2, strokeWidth: 1 }}
+                activeDot={{ r: 4 }}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
@@ -96,6 +248,7 @@ export default function SavingGoalsSection({
   const [editingId, setEditingId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [historyCounts, setHistoryCounts] = useState({});
+  const [historyPeriods, setHistoryPeriods] = useState({});
 
   const submitAndClose = async (e) => {
     e.preventDefault();
@@ -436,11 +589,19 @@ export default function SavingGoalsSection({
 
               {expanded && (
                 <SavingHistoryPanel
+                  goal={goal}
                   count={historyCount}
+                  period={historyPeriods[goal.id] || "weekly"}
                   onCountChange={(count) =>
                     setHistoryCounts((prev) => ({
                       ...prev,
                       [goal.id]: count,
+                    }))
+                  }
+                  onPeriodChange={(period) =>
+                    setHistoryPeriods((prev) => ({
+                      ...prev,
+                      [goal.id]: period,
                     }))
                   }
                 />
