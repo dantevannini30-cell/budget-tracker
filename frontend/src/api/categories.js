@@ -26,3 +26,13 @@ export async function setCategoryRecurring(category, active) {
 
   return handleResponse(res, "Failed to update recurring category");
 }
+
+export async function setCategoryIncome(category, active) {
+  const res = await fetch(`${API}/api/categories/income`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category, active }),
+  });
+
+  return handleResponse(res, "Failed to update income category");
+}

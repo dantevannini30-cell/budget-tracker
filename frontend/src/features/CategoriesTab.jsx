@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   getCategories,
   getCategoryTransactions,
+  setCategoryIncome,
   setCategoryRecurring,
 } from "@/api/categories";
 import { cardStyle } from "@/shared/styles/ui";
@@ -149,6 +150,30 @@ export default function CategoriesTab() {
     }
   };
 
+  const toggleIncome = async (category, active) => {
+    setCategories((prev) =>
+      prev.map((item) =>
+        item.category === category ? { ...item, is_income: active } : item
+      )
+    );
+
+    try {
+      const updated = await setCategoryIncome(category, active);
+      setCategories((prev) =>
+        prev.map((item) =>
+          item.category === category ? { ...item, ...updated } : item
+        )
+      );
+    } catch (err) {
+      console.error("Failed updating income category:", err);
+      setCategories((prev) =>
+        prev.map((item) =>
+          item.category === category ? { ...item, is_income: !active } : item
+        )
+      );
+    }
+  };
+
   return (
     <div
       style={{
@@ -182,7 +207,7 @@ export default function CategoriesTab() {
             textTransform: "uppercase",
           }}
         >
-          Tick recurring labels
+          Tick income and recurring labels
         </div>
       </div>
 
@@ -225,19 +250,54 @@ export default function CategoriesTab() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "28px minmax(0, 1fr) auto",
+                    gridTemplateColumns: "80px 96px minmax(0, 1fr) auto",
                     alignItems: "center",
                     gap: 12,
                   }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={Boolean(item.is_recurring)}
-                    aria-label={`Mark ${item.category} as recurring`}
-                    onChange={(e) =>
-                      toggleRecurring(item.category, e.target.checked)
-                    }
-                  />
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      color: "var(--muted2)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.is_income)}
+                      aria-label={`Mark ${item.category} as income`}
+                      onChange={(e) =>
+                        toggleIncome(item.category, e.target.checked)
+                      }
+                    />
+                    Income
+                  </label>
+
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      color: "var(--muted2)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.is_recurring)}
+                      aria-label={`Mark ${item.category} as recurring`}
+                      onChange={(e) =>
+                        toggleRecurring(item.category, e.target.checked)
+                      }
+                    />
+                    Recurring
+                  </label>
 
                   <button
                     type="button"
@@ -281,7 +341,7 @@ export default function CategoriesTab() {
                 {isExpanded && (
                   <div
                     style={{
-                      marginLeft: 40,
+                      marginLeft: 188,
                       marginTop: 10,
                       paddingTop: 10,
                       borderTop: "1px solid var(--border)",

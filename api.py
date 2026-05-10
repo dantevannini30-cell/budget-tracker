@@ -30,7 +30,15 @@ from database import (
     get_recurring_rules,
     get_categories_with_recurring,
     get_category_transactions,
+    get_net_worth_projection,
+    set_category_income,
     set_category_recurring,
+    create_debt,
+    update_debt,
+    delete_debt,
+    get_debts,
+    create_debt_payment,
+    delete_debt_payment,
 )
 
 from utils import (
@@ -107,6 +115,25 @@ class RecurringRuleCreate(BaseModel):
 class CategoryRecurringUpdate(BaseModel):
     category: str
     active: bool
+
+
+class CategoryIncomeUpdate(BaseModel):
+    category: str
+    active: bool
+
+
+class DebtCreate(BaseModel):
+    name: str
+    initial_amount: float
+    category: str | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class DebtPaymentCreate(BaseModel):
+    amount: float
+    payment_date: str | None = None
+    note: str | None = None
 
 
 # ---------------------------
@@ -508,6 +535,97 @@ def update_category_recurring(update: CategoryRecurringUpdate):
     return category
 
 
+@app.put("/api/categories/income")
+def update_category_income(update: CategoryIncomeUpdate):
+    category = set_category_income(update.category, update.active)
+
+    if not category:
+        raise HTTPException(404, "Category not found")
+
+    return category
+
+
+@app.get("/api/net-worth/projection")
+def net_worth_projection(
+    period: str = Query("monthly"),
+    history_count: int = Query(52, ge=1, le=261),
+    future_count: int = Query(52, ge=1, le=261),
+):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, monthly, or yearly")
+
+    return get_net_worth_projection(period, history_count, future_count)
+
+
+# ---------------------------
+# DEBTS
+# ---------------------------
+
+@app.get("/api/debts")
+def list_debts(active_only: bool = Query(False)):
+    return get_debts(active_only)
+
+
+@app.post("/api/debts")
+def create_debt_endpoint(debt: DebtCreate):
+    return create_debt(
+        debt.name,
+        debt.initial_amount,
+        debt.category,
+        debt.start_date,
+        debt.active,
+    )
+
+
+@app.put("/api/debts/{debt_id}")
+def update_debt_endpoint(debt_id: str, debt: DebtCreate):
+    updated = update_debt(
+        debt_id,
+        debt.name,
+        debt.initial_amount,
+        debt.category,
+        debt.start_date,
+        debt.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Debt not found")
+
+    return updated
+
+
+@app.delete("/api/debts/{debt_id}")
+def delete_debt_endpoint(debt_id: str):
+    if not delete_debt(debt_id):
+        raise HTTPException(404, "Debt not found")
+
+    return {"message": "deleted"}
+
+
+@app.post("/api/debts/{debt_id}/payments")
+def create_debt_payment_endpoint(debt_id: str, payment: DebtPaymentCreate):
+    debt = create_debt_payment(
+        debt_id,
+        payment.amount,
+        payment.payment_date,
+        payment.note,
+    )
+
+    if not debt:
+        raise HTTPException(404, "Debt not found")
+
+    return debt
+
+
+@app.delete("/api/debts/{debt_id}/payments/{payment_id}")
+def delete_debt_payment_endpoint(debt_id: str, payment_id: str):
+    if not delete_debt_payment(debt_id, payment_id):
+        raise HTTPException(404, "Debt payment not found")
+
+    debt = get_debts()
+    return {"message": "deleted", "debts": debt}
+
+
 @app.get("/api/summary")
 def summary(start_date: str = None, end_date: str = None):
     conn = get_connection()
@@ -630,6 +748,11 @@ def dashboard(
     spending_targets = get_spending_targets_with_progress()
     saving_goals = get_saving_goals()
     recurring_rules = get_recurring_rules()
+    recurring_expense_categories = [
+        category["category"]
+        for category in get_categories_with_recurring()
+        if category.get("is_recurring")
+    ]
 
     return {
         "summary": summary,
@@ -637,6 +760,7 @@ def dashboard(
         "spending_targets": spending_targets,
         "saving_goals": saving_goals,
         "recurring_rules": recurring_rules,
+        "recurring_expense_categories": recurring_expense_categories,
         "date_range": {
             "start_date": start_date,
             "end_date": end_date,

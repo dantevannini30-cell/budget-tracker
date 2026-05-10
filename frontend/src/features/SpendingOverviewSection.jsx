@@ -264,15 +264,20 @@ export default function SpendingOverviewSection({
 
   const summary = data?.summary ?? [];
   const incomeSummary = data?.income_summary ?? [];
+  const recurringExpenseCategories = new Set(
+    data?.recurring_expense_categories || []
+  );
   const incomeData = incomeSummary.map((i) => ({
     name: i.category,
     value: i.total,
   }));
 
-  const spendingData = summary.map((i) => ({
-    name: i.category,
-    value: i.total,
-  }));
+  const spendingData = summary
+    .filter((i) => !recurringExpenseCategories.has(i.category))
+    .map((i) => ({
+      name: i.category,
+      value: i.total,
+    }));
 
   const incomeTotal = incomeSummary.reduce(
     (acc, i) => acc + (i.total || 0),
@@ -472,7 +477,7 @@ export default function SpendingOverviewSection({
           />
           <PieChartWrapper
             data={spendingData}
-            title="Spending by Category"
+            title="Spending by Category (Excluding Recurring)"
           />
         </div>
       )}
