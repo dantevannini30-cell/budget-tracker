@@ -80,11 +80,30 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recurring_rules (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            type TEXT,
+            period TEXT,
+            category TEXT,
+            statement_match TEXT,
+            amount REAL,
+            start_date TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
     ensure_column(cursor, "saving_goals", "start_date", "TEXT")
     ensure_column(cursor, "saving_goals", "account_id", "TEXT")
     ensure_column(cursor, "spending_targets", "start_date", "TEXT")
     ensure_column(cursor, "transactions", "account_name", "TEXT")
     ensure_column(cursor, "transaction_classifications", "status", "TEXT")
+    ensure_column(cursor, "recurring_rules", "active", "INTEGER DEFAULT 1")
+    ensure_column(cursor, "recurring_rules", "created_at", "TEXT")
+    ensure_column(cursor, "recurring_rules", "updated_at", "TEXT")
 
     backfill_transaction_classifications(cursor)
     backfill_classification_status(cursor)
@@ -828,6 +847,398 @@ def get_spending_targets_with_progress():
     return result
 
 
+def create_recurring_rule(
+    name,
+    rule_type,
+    period,
+    category=None,
+    statement_match=None,
+    amount=None,
+    start_date=None,
+    active=True,
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    rule_id = uuid.uuid4().hex
+    start_date = start_date or today_iso()
+    timestamp = now_iso()
+    rule_type = normalize_recurring_type(rule_type)
+    period = normalize_recurring_period(period)
+    category = (category or "").strip()
+    statement_match = (statement_match or "").strip()
+
+    cursor.execute("""
+        INSERT INTO recurring_rules (
+            id, name, type, period, category, statement_match,
+            amount, start_date, active, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        rule_id,
+        name,
+        rule_type,
+        period,
+        category,
+        statement_match,
+        amount,
+        start_date,
+        1 if active else 0,
+        timestamp,
+        timestamp,
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return get_recurring_rule(rule_id)
+
+
+def update_recurring_rule(
+    rule_id,
+    name,
+    rule_type,
+    period,
+    category=None,
+    statement_match=None,
+    amount=None,
+    start_date=None,
+    active=True,
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    start_date = start_date or today_iso()
+    rule_type = normalize_recurring_type(rule_type)
+    period = normalize_recurring_period(period)
+    category = (category or "").strip()
+    statement_match = (statement_match or "").strip()
+
+    cursor.execute("""
+        UPDATE recurring_rules
+        SET
+            name = ?,
+            type = ?,
+            period = ?,
+            category = ?,
+            statement_match = ?,
+            amount = ?,
+            start_date = ?,
+            active = ?,
+            updated_at = ?
+        WHERE id = ?
+    """, (
+        name,
+        rule_type,
+        period,
+        category,
+        statement_match,
+        amount,
+        start_date,
+        1 if active else 0,
+        now_iso(),
+        rule_id,
+    ))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return None
+
+    conn.commit()
+    conn.close()
+    return get_recurring_rule(rule_id)
+
+
+def delete_recurring_rule(rule_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM recurring_rules
+        WHERE id = ?
+    """, (rule_id,))
+
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_recurring_rule(rule_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM recurring_rules
+        WHERE id = ?
+    """, (rule_id,))
+
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    rule = enrich_recurring_rule(cursor, dict(row))
+    conn.close()
+    return rule
+
+
+def get_recurring_rules(active_only=False):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT *
+        FROM recurring_rules
+    """
+    params = []
+
+    if active_only:
+        query += " WHERE active = ?"
+        params.append(1)
+
+    query += " ORDER BY active DESC, name COLLATE NOCASE ASC"
+
+    cursor.execute(query, params)
+    rules = [enrich_recurring_rule(cursor, dict(row)) for row in cursor.fetchall()]
+
+    conn.close()
+    return rules
+
+
+def get_categories_with_recurring():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COUNT(*) AS transaction_count,
+            COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) AS expense_total,
+            COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS income_total,
+            MAX(t.date) AS latest_date,
+            COALESCE(MAX(r.active), 0) AS is_recurring,
+            MAX(r.id) AS recurring_rule_id
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        LEFT JOIN recurring_rules r
+            ON r.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
+            AND COALESCE(r.statement_match, '') = ''
+        GROUP BY 1
+        ORDER BY category COLLATE NOCASE ASC
+    """)
+
+    categories = []
+    for row in cursor.fetchall():
+        category = dict(row)
+        category["is_recurring"] = bool(category["is_recurring"])
+        categories.append(category)
+
+    conn.close()
+    return categories
+
+
+def set_category_recurring(category, active=True):
+    category = (category or "").strip()
+    if not category:
+        return None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id
+        FROM recurring_rules
+        WHERE category = ?
+        AND COALESCE(statement_match, '') = ''
+        LIMIT 1
+    """, (category,))
+
+    row = cursor.fetchone()
+    timestamp = now_iso()
+
+    if row:
+        cursor.execute("""
+            UPDATE recurring_rules
+            SET
+                active = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (1 if active else 0, timestamp, row["id"]))
+    else:
+        cursor.execute("""
+            INSERT INTO recurring_rules (
+                id, name, type, period, category, statement_match,
+                amount, start_date, active, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            uuid.uuid4().hex,
+            category,
+            "expense",
+            "monthly",
+            category,
+            "",
+            None,
+            today_iso(),
+            1 if active else 0,
+            timestamp,
+            timestamp,
+        ))
+
+    conn.commit()
+    conn.close()
+    return get_category_summary(category)
+
+
+def get_category_summary(category):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COUNT(*) AS transaction_count,
+            COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) AS expense_total,
+            COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS income_total,
+            MAX(t.date) AS latest_date,
+            COALESCE(MAX(r.active), 0) AS is_recurring,
+            MAX(r.id) AS recurring_rule_id
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        LEFT JOIN recurring_rules r
+            ON r.category = COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised')
+            AND COALESCE(r.statement_match, '') = ''
+        WHERE COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+        GROUP BY 1
+    """, (category,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    result = dict(row)
+    result["is_recurring"] = bool(result["is_recurring"])
+    return result
+
+
+def get_category_transactions(category):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            t.id,
+            t.amount,
+            t.date,
+            t.description,
+            t.statement,
+            t.account_id,
+            t.account_name,
+            t.balance,
+            COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') AS category,
+            COALESCE(c.source, 'unset') AS category_source,
+            COALESCE(c.status, 'unset') AS category_status
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') = ?
+        ORDER BY t.date DESC
+    """, (category,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def enrich_recurring_rule(cursor, rule):
+    period_start = get_current_period_start(
+        rule.get("start_date"),
+        rule.get("period"),
+        date.today(),
+    )
+    matches = get_recurring_rule_matches(cursor, rule)
+    current_matches = [
+        txn for txn in matches
+        if parse_date(txn.get("date")) and parse_date(txn.get("date")) >= parse_date(period_start)
+    ]
+
+    total_key = "amount"
+    current_total = sum(abs(float(txn[total_key] or 0)) for txn in current_matches)
+    average_amount = (
+        sum(abs(float(txn[total_key] or 0)) for txn in matches) / len(matches)
+        if matches else 0
+    )
+    last_match = matches[0] if matches else None
+
+    return {
+        **rule,
+        "active": bool(rule.get("active")),
+        "period_start": period_start,
+        "current_period_total": current_total,
+        "average_amount": average_amount,
+        "transaction_count": len(matches),
+        "last_amount": abs(float(last_match["amount"])) if last_match else None,
+        "last_date": last_match["date"] if last_match else None,
+        "recent_matches": matches[:5],
+    }
+
+
+def get_recurring_rule_matches(cursor, rule):
+    filters = ["t.date >= ?"]
+    params = [rule.get("start_date") or today_iso()]
+
+    if rule.get("type") == "income":
+        filters.append("t.amount > 0")
+    else:
+        filters.append("t.amount < 0")
+
+    if rule.get("category"):
+        filters.append("COALESCE(NULLIF(c.category, ''), t.category, '') = ?")
+        params.append(rule["category"])
+
+    if rule.get("statement_match"):
+        filters.append("LOWER(COALESCE(t.statement, t.description, '')) LIKE ?")
+        params.append(f"%{rule['statement_match'].lower()}%")
+
+    where_clause = " AND ".join(filters)
+    cursor.execute(f"""
+        SELECT
+            t.id,
+            t.amount,
+            t.date,
+            t.description,
+            t.statement,
+            t.account_id,
+            t.account_name,
+            COALESCE(NULLIF(c.category, ''), t.category, '') AS category
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE {where_clause}
+        ORDER BY t.date DESC
+    """, params)
+
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def normalize_recurring_type(rule_type):
+    if rule_type == "income":
+        return "income"
+    return "expense"
+
+
+def normalize_recurring_period(period):
+    if period in {"weekly", "fortnightly", "monthly", "yearly"}:
+        return period
+    return "monthly"
+
+
 def get_spent_for_categories(cursor, categories, start_date):
     if not categories:
         return 0
@@ -856,6 +1267,10 @@ def get_current_period_start(start_date, period, today=None):
     if period == "weekly":
         elapsed_days = (today - anchor).days
         return (anchor + timedelta(days=(elapsed_days // 7) * 7)).isoformat()
+
+    if period == "fortnightly":
+        elapsed_days = (today - anchor).days
+        return (anchor + timedelta(days=(elapsed_days // 14) * 14)).isoformat()
 
     if period == "monthly":
         current = anchor

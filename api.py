@@ -24,6 +24,13 @@ from database import (
     create_saving_goal,
     update_saving_goal,
     get_saving_goals,
+    create_recurring_rule,
+    update_recurring_rule,
+    delete_recurring_rule,
+    get_recurring_rules,
+    get_categories_with_recurring,
+    get_category_transactions,
+    set_category_recurring,
 )
 
 from utils import (
@@ -84,6 +91,22 @@ class SavingGoalCreate(BaseModel):
     current_amount: float = 0
     start_date: str | None = None
     account_id: str | None = None
+
+
+class RecurringRuleCreate(BaseModel):
+    name: str
+    type: str = "expense"
+    period: str = "monthly"
+    category: str | None = None
+    statement_match: str | None = None
+    amount: float | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class CategoryRecurringUpdate(BaseModel):
+    category: str
+    active: bool
 
 
 # ---------------------------
@@ -397,6 +420,94 @@ def goal_account_history(
     }
 
 
+# ---------------------------
+# RECURRING RULES
+# ---------------------------
+
+def validate_recurring_rule(rule: RecurringRuleCreate):
+    if rule.type not in {"expense", "income"}:
+        raise HTTPException(400, "Type must be expense or income")
+
+    if rule.period not in {"weekly", "fortnightly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, fortnightly, monthly, or yearly")
+
+    if not (rule.category or rule.statement_match):
+        raise HTTPException(400, "Choose a category or statement match")
+
+
+@app.get("/api/recurring-rules")
+def list_recurring_rules(active_only: bool = Query(False)):
+    return get_recurring_rules(active_only)
+
+
+@app.post("/api/recurring-rules")
+def create_recurring(rule: RecurringRuleCreate):
+    validate_recurring_rule(rule)
+    return create_recurring_rule(
+        rule.name,
+        rule.type,
+        rule.period,
+        rule.category,
+        rule.statement_match,
+        rule.amount,
+        rule.start_date,
+        rule.active,
+    )
+
+
+@app.put("/api/recurring-rules/{rule_id}")
+def update_recurring(rule_id: str, rule: RecurringRuleCreate):
+    validate_recurring_rule(rule)
+    updated = update_recurring_rule(
+        rule_id,
+        rule.name,
+        rule.type,
+        rule.period,
+        rule.category,
+        rule.statement_match,
+        rule.amount,
+        rule.start_date,
+        rule.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Recurring rule not found")
+
+    return updated
+
+
+@app.delete("/api/recurring-rules/{rule_id}")
+def remove_recurring(rule_id: str):
+    if not delete_recurring_rule(rule_id):
+        raise HTTPException(404, "Recurring rule not found")
+
+    return {"message": "deleted"}
+
+
+# ---------------------------
+# CATEGORIES
+# ---------------------------
+
+@app.get("/api/categories")
+def list_categories():
+    return get_categories_with_recurring()
+
+
+@app.get("/api/categories/{category}/transactions")
+def list_category_transactions(category: str):
+    return get_category_transactions(category)
+
+
+@app.put("/api/categories/recurring")
+def update_category_recurring(update: CategoryRecurringUpdate):
+    category = set_category_recurring(update.category, update.active)
+
+    if not category:
+        raise HTTPException(404, "Category not found")
+
+    return category
+
+
 @app.get("/api/summary")
 def summary(start_date: str = None, end_date: str = None):
     conn = get_connection()
@@ -518,12 +629,14 @@ def dashboard(
     # ---------------------------
     spending_targets = get_spending_targets_with_progress()
     saving_goals = get_saving_goals()
+    recurring_rules = get_recurring_rules()
 
     return {
         "summary": summary,
         "income_summary": income_summary,
         "spending_targets": spending_targets,
         "saving_goals": saving_goals,
+        "recurring_rules": recurring_rules,
         "date_range": {
             "start_date": start_date,
             "end_date": end_date,

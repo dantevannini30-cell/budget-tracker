@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import Dashboard from "@/features/Dashboard";
 import TransactionsTab from "@/features/TransactionsTab";
+import CategoriesTab from "@/features/CategoriesTab";
 
 /*
 KEEP TEMPORARILY:
@@ -78,7 +79,7 @@ export default function App() {
       <header style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 24, letterSpacing: "0.1em", color: "var(--accent)" }}>BUDGET</div>
         <nav style={{ display: "flex" }}>
-          {["dashboard", "transactions"].map(t => (
+          {["dashboard", "categories", "transactions"].map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: "none", border: "none", cursor: "pointer", padding: "0 16px", height: 52,
               fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em",
@@ -101,6 +102,7 @@ export default function App() {
         }}
       >
         {tab === "dashboard" && <Dashboard />}
+        {tab === "categories" && <CategoriesTab />}
         {tab === "transactions" && <TransactionsTab />}
       </main>
     </div>
