@@ -33,12 +33,17 @@ from database import (
     get_net_worth_projection,
     set_category_income,
     set_category_recurring,
+    get_recurring_cashflow_history,
     create_debt,
     update_debt,
     delete_debt,
     get_debts,
     create_debt_payment,
     delete_debt_payment,
+    create_category_allocation,
+    delete_category_allocation,
+    get_category_allocations,
+    apply_allocations_to_category_totals,
 )
 
 from utils import (
@@ -133,6 +138,14 @@ class DebtCreate(BaseModel):
 class DebtPaymentCreate(BaseModel):
     amount: float
     payment_date: str | None = None
+    note: str | None = None
+
+
+class TransactionAllocationCreate(BaseModel):
+    from_category: str
+    to_category: str
+    amount: float
+    allocation_date: str | None = None
     note: str | None = None
 
 
@@ -289,12 +302,7 @@ def by_category():
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    total = sum(r["total"] for r in rows)
-
-    for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
-
-    return rows
+    return apply_allocations_to_category_totals(rows)
 
 
 @app.get("/api/summary/by-category/income")
@@ -409,7 +417,7 @@ def goal_progress(goal_id: str):
 def goal_account_history(
     goal_id: str,
     period: str = Query("weekly"),
-    count: int = Query(8, ge=1, le=60),
+    count: int = Query(8, ge=1, le=260),
 ):
     if period not in {"weekly", "monthly", "yearly"}:
         raise HTTPException(400, "Period must be weekly, monthly, or yearly")
@@ -557,6 +565,17 @@ def net_worth_projection(
     return get_net_worth_projection(period, history_count, future_count)
 
 
+@app.get("/api/recurring-cashflow/history")
+def recurring_cashflow_history(
+    period: str = Query("monthly"),
+    count: int = Query(12, ge=1, le=60),
+):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, monthly, or yearly")
+
+    return get_recurring_cashflow_history(period, count)
+
+
 # ---------------------------
 # DEBTS
 # ---------------------------
@@ -626,6 +645,39 @@ def delete_debt_payment_endpoint(debt_id: str, payment_id: str):
     return {"message": "deleted", "debts": debt}
 
 
+# ---------------------------
+# ALLOCATIONS
+# ---------------------------
+
+@app.get("/api/allocations")
+def list_allocations():
+    return get_category_allocations()
+
+
+@app.post("/api/allocations")
+def create_allocation(allocation: TransactionAllocationCreate):
+    created = create_category_allocation(
+        allocation.from_category,
+        allocation.to_category,
+        allocation.amount,
+        allocation.allocation_date,
+        allocation.note,
+    )
+
+    if not created:
+        raise HTTPException(400, "Could not create allocation")
+
+    return created
+
+
+@app.delete("/api/allocations/{allocation_id}")
+def delete_allocation(allocation_id: str):
+    if not delete_category_allocation(allocation_id):
+        raise HTTPException(404, "Allocation not found")
+
+    return {"message": "deleted"}
+
+
 @app.get("/api/summary")
 def summary(start_date: str = None, end_date: str = None):
     conn = get_connection()
@@ -658,12 +710,7 @@ def summary(start_date: str = None, end_date: str = None):
 
     conn.close()
 
-    total = sum(r["total"] for r in rows)
-
-    for r in rows:
-        r["pct"] = round((r["total"] / total) * 100, 1) if total else 0
-
-    return rows
+    return apply_allocations_to_category_totals(rows, start_date, end_date)
 
 
 @app.get("/api/dashboard")
@@ -700,12 +747,11 @@ def dashboard(
     query += " GROUP BY 1 HAVING total > 0 ORDER BY total DESC"
 
     cursor.execute(query, params)
-    summary = [dict(r) for r in cursor.fetchall()]
-
-    total_spent = sum(r["total"] for r in summary)
-
-    for r in summary:
-        r["pct"] = round((r["total"] / total_spent) * 100, 1) if total_spent else 0
+    summary = apply_allocations_to_category_totals(
+        [dict(r) for r in cursor.fetchall()],
+        start_date,
+        end_date,
+    )
 
     # ---------------------------
     # INCOME SUMMARY

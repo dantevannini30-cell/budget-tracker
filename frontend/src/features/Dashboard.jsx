@@ -6,6 +6,7 @@ import SpendingTargetsSection from "./goals/SpendingTargetsSection";
 import SavingGoalsSection from "./goals/SavingGoalsSection";
 import NetWorthProjectionSection from "./NetWorthProjectionSection";
 import DebtsSection from "./debts/DebtsSection";
+import RecurringCashflowSection from "./RecurringCashflowSection";
 
 export default function Dashboard() {
   // Initialize with last week by default
@@ -58,6 +59,8 @@ export default function Dashboard() {
         endDate={dateRange.endDate}
         onDateChange={handleDateChange}
       />
+
+      <RecurringCashflowSection />
 
       <NetWorthProjectionSection />
 

@@ -129,6 +129,18 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_allocations (
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT,
+            from_category TEXT,
+            to_category TEXT,
+            amount REAL,
+            note TEXT,
+            created_at TEXT
+        )
+    """)
+
     ensure_column(cursor, "saving_goals", "start_date", "TEXT")
     ensure_column(cursor, "saving_goals", "account_id", "TEXT")
     ensure_column(cursor, "spending_targets", "start_date", "TEXT")
@@ -145,6 +157,7 @@ def init_db():
     ensure_column(cursor, "debts", "active", "INTEGER DEFAULT 1")
     ensure_column(cursor, "debts", "created_at", "TEXT")
     ensure_column(cursor, "debts", "updated_at", "TEXT")
+    ensure_column(cursor, "transaction_allocations", "allocation_date", "TEXT")
 
     backfill_transaction_classifications(cursor)
     backfill_classification_status(cursor)
@@ -612,7 +625,7 @@ def get_account_balance_history(account_id, period="weekly", count=8, today=None
     if period not in {"weekly", "monthly", "yearly"}:
         raise ValueError("Unsupported history period")
 
-    count = max(1, min(int(count or 8), 60))
+    count = max(1, min(int(count or 8), 260))
     today = today or date.today()
 
     periods = []
@@ -1215,6 +1228,77 @@ def get_category_summary(category):
     return result
 
 
+def get_recurring_cashflow_history(period="monthly", count=12):
+    if period not in {"weekly", "monthly", "yearly"}:
+        period = "monthly"
+
+    count = max(1, min(int(count or 12), 60))
+    today = date.today()
+    periods = build_projection_periods(today, period, count)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    income_categories = get_income_categories(cursor)
+    recurring_categories = get_recurring_expense_categories(cursor)
+
+    points = []
+    for item in periods:
+        income = get_period_income(
+            cursor,
+            income_categories,
+            item["start_date"],
+            item["end_date"],
+        )
+        expenses = get_period_expenses_for_categories(
+            cursor,
+            recurring_categories,
+            item["start_date"],
+            item["end_date"],
+        )
+        points.append({
+            **item,
+            "income": income,
+            "expenses": expenses,
+            "net": income - expenses,
+        })
+
+    conn.close()
+
+    return {
+        "period": period,
+        "count": count,
+        "income_categories": income_categories,
+        "recurring_expense_categories": recurring_categories,
+        "points": points,
+    }
+
+
+def get_income_categories(cursor):
+    cursor.execute("""
+        SELECT category
+        FROM category_settings
+        WHERE is_income = 1
+    """)
+    return [row["category"] for row in cursor.fetchall()]
+
+
+def get_recurring_expense_categories(cursor):
+    cursor.execute("""
+        SELECT category
+        FROM category_settings
+        WHERE is_recurring_expense = 1
+        UNION
+        SELECT category
+        FROM recurring_rules
+        WHERE active = 1
+        AND category IS NOT NULL
+        AND category != ''
+        AND COALESCE(statement_match, '') = ''
+    """)
+    return [row["category"] for row in cursor.fetchall()]
+
+
 def get_category_transactions(category):
     conn = get_connection()
     cursor = conn.cursor()
@@ -1242,6 +1326,152 @@ def get_category_transactions(category):
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
+
+
+def create_category_allocation(from_category, to_category, amount, allocation_date=None, note=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    normalized_amount = abs(float(amount or 0))
+    from_category = (from_category or "").strip()
+    to_category = (to_category or "").strip()
+    allocation_date = allocation_date or today_iso()
+
+    if normalized_amount <= 0 or not from_category or not to_category:
+        conn.close()
+        return None
+
+    allocation_id = uuid.uuid4().hex
+    cursor.execute("""
+        INSERT INTO transaction_allocations (
+            id, transaction_id, from_category, to_category,
+            amount, allocation_date, note, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        allocation_id,
+        None,
+        from_category,
+        to_category,
+        normalized_amount,
+        allocation_date,
+        note or "",
+        now_iso(),
+    ))
+
+    conn.commit()
+    conn.close()
+    return get_category_allocation(allocation_id)
+
+
+def delete_category_allocation(allocation_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM transaction_allocations
+        WHERE id = ?
+    """, (allocation_id,))
+
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_category_allocation(allocation_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            a.*,
+            t.amount AS transaction_amount,
+            t.date AS transaction_date,
+            t.description,
+            t.statement
+        FROM transaction_allocations a
+        LEFT JOIN transactions t
+            ON t.id = a.transaction_id
+        WHERE a.id = ?
+    """, (allocation_id,))
+
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_category_allocations():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            a.*,
+            t.amount AS transaction_amount,
+            t.date AS transaction_date,
+            t.description,
+            t.statement
+        FROM transaction_allocations a
+        LEFT JOIN transactions t
+            ON t.id = a.transaction_id
+        ORDER BY COALESCE(a.allocation_date, t.date) DESC, a.created_at DESC
+    """)
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def apply_allocations_to_category_totals(rows, start_date=None, end_date=None):
+    totals = {row["category"]: float(row["total"] or 0) for row in rows}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            a.from_category,
+            a.to_category,
+            a.amount
+        FROM transaction_allocations a
+        LEFT JOIN transactions t
+            ON t.id = a.transaction_id
+        WHERE 1 = 1
+    """
+    params = []
+
+    if start_date:
+        query += " AND COALESCE(a.allocation_date, t.date) >= ?"
+        params.append(start_date)
+
+    if end_date:
+        query += " AND COALESCE(a.allocation_date, t.date) <= ?"
+        params.append(end_date)
+
+    cursor.execute(query, params)
+    allocations = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    for allocation in allocations:
+        from_category = allocation["from_category"] or "Uncategorised"
+        to_category = allocation["to_category"] or "Uncategorised"
+        amount = float(allocation["amount"] or 0)
+        totals[from_category] = totals.get(from_category, 0) - amount
+        totals[to_category] = totals.get(to_category, 0) + amount
+
+    adjusted = [
+        {"category": category, "total": total}
+        for category, total in totals.items()
+        if total > 0
+    ]
+    adjusted.sort(key=lambda row: row["total"], reverse=True)
+    total_amount = sum(row["total"] for row in adjusted)
+
+    for row in adjusted:
+        row["pct"] = round((row["total"] / total_amount) * 100, 1) if total_amount else 0
+
+    return adjusted
 
 
 def get_net_worth_projection(period="monthly", history_count=12, future_count=12):
@@ -1780,6 +2010,26 @@ def get_period_non_recurring_spending(cursor, recurring_categories, start_date, 
         AND t.date <= ?
         {recurring_filter}
     """, params)
+
+    return float(cursor.fetchone()["total"] or 0)
+
+
+def get_period_expenses_for_categories(cursor, categories, start_date, end_date):
+    if not categories:
+        return 0
+
+    placeholders = ",".join(["?"] * len(categories))
+    end_of_day = f"{end_date}T23:59:59"
+    cursor.execute(f"""
+        SELECT COALESCE(SUM(ABS(t.amount)), 0) AS total
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.transaction_id = t.id
+        WHERE t.amount < 0
+        AND COALESCE(NULLIF(c.category, ''), t.category, 'Uncategorised') IN ({placeholders})
+        AND t.date >= ?
+        AND t.date <= ?
+    """, categories + [start_date, end_of_day])
 
     return float(cursor.fetchone()["total"] or 0)
 

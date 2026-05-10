@@ -18,12 +18,70 @@ import {
   primaryBtn,
 } from "@/shared/styles/ui";
 
-const HISTORY_COUNTS = [4, 8, 12, 24];
 const HISTORY_PERIODS = [
   { value: "weekly", label: "Weeks" },
   { value: "monthly", label: "Months" },
   { value: "yearly", label: "Years" },
 ];
+const HISTORY_COUNTS_BY_PERIOD = {
+  weekly: [5, 12, 26, 52, 104],
+  monthly: [5, 12, 24],
+  yearly: [1, 2, 3, 5],
+};
+
+function getWeeklyPointCount(period, count) {
+  if (period === "yearly") return count * 52;
+  if (period === "monthly") return Math.ceil(count * (52 / 12));
+  return count;
+}
+
+function getDefaultCountForPeriod(period) {
+  if (period === "yearly") return 5;
+  if (period === "monthly") return 5;
+  return 5;
+}
+
+function formatAxisTick(value, period) {
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+
+  if (period === "yearly") return String(date.getFullYear());
+
+  if (period === "monthly") {
+    return date.toLocaleDateString("en-NZ", {
+      month: "short",
+      year: "2-digit",
+    });
+  }
+
+  return date.toLocaleDateString("en-NZ", {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function getPeriodKey(value, period) {
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+
+  if (period === "yearly") return String(date.getFullYear());
+  if (period === "monthly") return `${date.getFullYear()}-${date.getMonth()}`;
+  return value.slice(0, 10);
+}
+
+function getAxisTicks(points, period) {
+  const seen = new Set();
+  const ticks = [];
+
+  points.forEach((point) => {
+    const key = getPeriodKey(point.end_date, period);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ticks.push(point.end_date);
+  });
+
+  return ticks;
+}
 
 function SavingHistoryPanel({
   goal,
@@ -46,7 +104,10 @@ function SavingHistoryPanel({
 
       try {
         setLoadingHistory(true);
-        const data = await getSavingGoalAccountHistory(goal.id, { period, count });
+        const data = await getSavingGoalAccountHistory(goal.id, {
+          period: "weekly",
+          count: getWeeklyPointCount(period, count),
+        });
         if (!cancelled) setHistory(data.points || []);
       } catch (err) {
         console.error("Failed loading saving goal account history:", err);
@@ -70,6 +131,8 @@ function SavingHistoryPanel({
       balance: Number(point.balance),
     }));
   const hasAccount = Boolean(goal.account_id);
+  const countOptions = HISTORY_COUNTS_BY_PERIOD[period] || HISTORY_COUNTS_BY_PERIOD.weekly;
+  const axisTicks = getAxisTicks(chartData, period);
 
   return (
     <div
@@ -96,7 +159,7 @@ function SavingHistoryPanel({
             textTransform: "uppercase",
           }}
         >
-          Account value history
+          Weekly account value history
         </div>
 
         <div
@@ -109,7 +172,11 @@ function SavingHistoryPanel({
         >
           <select
             value={period}
-            onChange={(e) => onPeriodChange(e.target.value)}
+            onChange={(e) => {
+              const nextPeriod = e.target.value;
+              onPeriodChange(nextPeriod);
+              onCountChange(getDefaultCountForPeriod(nextPeriod));
+            }}
             style={{
               ...inputStyle,
               padding: "5px 8px",
@@ -132,7 +199,7 @@ function SavingHistoryPanel({
               width: 88,
             }}
           >
-            {HISTORY_COUNTS.map((option) => (
+            {countOptions.map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>
@@ -177,10 +244,12 @@ function SavingHistoryPanel({
                 stroke="rgba(255,255,255,0.06)"
               />
               <XAxis
-                dataKey="label"
+                dataKey="end_date"
+                ticks={axisTicks}
+                tickFormatter={(value) => formatAxisTick(value, period)}
                 axisLine={false}
                 tickLine={false}
-                interval="preserveStartEnd"
+                interval={0}
                 tick={{
                   fill: "#6b7a96",
                   fontSize: 10,
@@ -490,7 +559,8 @@ export default function SavingGoalsSection({
           const startDate = goal.start_date;
           const accountLabel = goal.account_name || goal.account_id;
           const expanded = expandedId === goal.id;
-          const historyCount = historyCounts[goal.id] || 8;
+          const historyPeriod = historyPeriods[goal.id] || "weekly";
+          const historyCount = historyCounts[goal.id] || HISTORY_COUNTS_BY_PERIOD[historyPeriod][0];
 
           return (
             <div
@@ -591,7 +661,7 @@ export default function SavingGoalsSection({
                 <SavingHistoryPanel
                   goal={goal}
                   count={historyCount}
-                  period={historyPeriods[goal.id] || "weekly"}
+                  period={historyPeriod}
                   onCountChange={(count) =>
                     setHistoryCounts((prev) => ({
                       ...prev,
