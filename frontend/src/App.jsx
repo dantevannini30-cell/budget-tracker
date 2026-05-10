@@ -1,9 +1,10 @@
 import { useState } from "react";
 
-import Dashboard from "@/features/Dashboard";
-import TransactionsTab from "@/features/TransactionsTab";
-import CategoriesTab from "@/features/CategoriesTab";
+import AccountsSection from "@/features/AccountsSection";
 import AllocationsTab from "@/features/AllocationsTab";
+import CashflowSection from "@/features/CashflowSection";
+import GoalsSection from "@/features/GoalsSection";
+import TransactionsSection from "@/features/TransactionsSection";
 
 /*
 KEEP TEMPORARILY:
@@ -67,20 +68,54 @@ globalStyle.textContent = `
     border-radius: 3px;
   }
   input:focus { outline: none; border-color: var(--accent) !important; }
+  button:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  @media (max-width: 760px) {
+    .app-shell-header {
+      height: auto !important;
+      padding: 12px 16px !important;
+      align-items: flex-start !important;
+      flex-wrap: wrap !important;
+      gap: 12px !important;
+    }
+    .app-shell-nav {
+      order: 3;
+      width: 100%;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .app-shell-nav button {
+      height: 38px !important;
+      padding: 0 12px !important;
+      flex: 0 0 auto;
+    }
+    .app-shell-main {
+      padding: 18px 16px !important;
+    }
+  }
 `;
 document.head.appendChild(globalStyle);
 
+const TABS = [
+  "accounts",
+  "cashflow",
+  "goals",
+  "transactions",
+  "allocations",
+];
 
 export default function App() {
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState("accounts");
 
   return (
     <div style={{ minHeight: "100vh" }}>
       {/* Header */}
-      <header style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
+      <header className="app-shell-header" style={{ borderBottom: "1px solid var(--border)", padding: "0 32px", display: "flex", alignItems: "center", gap: 36, height: 52, background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 24, letterSpacing: "0.1em", color: "var(--accent)" }}>BUDGET</div>
-        <nav style={{ display: "flex" }}>
-          {["dashboard", "categories", "allocations", "transactions"].map(t => (
+        <nav className="app-shell-nav" style={{ display: "flex" }}>
+          {TABS.map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: "none", border: "none", cursor: "pointer", padding: "0 16px", height: 52,
               fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em",
@@ -96,16 +131,18 @@ export default function App() {
       </header>
 
       <main
+        className="app-shell-main"
         style={{
           padding: "28px 32px",
           maxWidth: 1100,
           margin: "0 auto",
         }}
       >
-        {tab === "dashboard" && <Dashboard />}
-        {tab === "categories" && <CategoriesTab />}
+        {tab === "accounts" && <AccountsSection />}
+        {tab === "cashflow" && <CashflowSection />}
+        {tab === "goals" && <GoalsSection />}
+        {tab === "transactions" && <TransactionsSection />}
         {tab === "allocations" && <AllocationsTab />}
-        {tab === "transactions" && <TransactionsTab />}
       </main>
     </div>
   );

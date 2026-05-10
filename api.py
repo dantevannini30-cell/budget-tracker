@@ -11,6 +11,7 @@ from database import (
     ingest_transactions,
     get_latest_transaction_date,
     get_accounts,
+    update_account_name,
     get_account_balance_history,
     get_account_transactions,
     get_transactions as get_transactions_from_db,
@@ -104,6 +105,10 @@ class SavingGoalCreate(BaseModel):
     current_amount: float = 0
     start_date: str | None = None
     account_id: str | None = None
+
+
+class AccountUpdate(BaseModel):
+    name: str
 
 
 class RecurringRuleCreate(BaseModel):
@@ -219,6 +224,16 @@ def list_accounts():
 @app.get("/api/accounts/{account_id}/transactions")
 def list_account_transactions(account_id: str):
     return get_account_transactions(account_id)
+
+
+@app.put("/api/accounts/{account_id}")
+def rename_account(account_id: str, update: AccountUpdate):
+    account = update_account_name(account_id, update.name)
+
+    if not account:
+        raise HTTPException(404, "Account not found")
+
+    return account
 
 
 @app.put("/api/transactions/{transaction_id}")

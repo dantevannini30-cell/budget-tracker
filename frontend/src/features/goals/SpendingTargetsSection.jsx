@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   LineChart,
   Line,
@@ -237,6 +237,8 @@ function SpendingHistoryChart({ target, transactions, count, onCountChange }) {
 export default function SpendingTargetsSection({
   budgetId,
   transactions = [],
+  embedded = false,
+  createRequest = 0,
 }) {
   const {
     targets,
@@ -252,6 +254,7 @@ export default function SpendingTargetsSection({
   const [editingId, setEditingId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [historyCounts, setHistoryCounts] = useState({});
+  const lastCreateRequestRef = useRef(createRequest);
 
   const submitAndClose = async (e) => {
     e.preventDefault();
@@ -271,6 +274,14 @@ export default function SpendingTargetsSection({
     setEditingId(null);
     setModalOpen(true);
   };
+
+  useEffect(() => {
+    if (createRequest === lastCreateRequestRef.current) return;
+    lastCreateRequestRef.current = createRequest;
+    resetForm();
+    setEditingId(null);
+    setModalOpen(true);
+  }, [createRequest, resetForm]);
 
   const openEditModal = (target) => {
     setForm({
@@ -293,37 +304,39 @@ export default function SpendingTargetsSection({
   return (
     <div
       style={{
-        ...cardStyle,
+        ...(embedded ? {} : cardStyle),
         padding: 0,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-          padding: "18px 20px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
+      {!embedded && (
         <div
           style={{
-            fontFamily: "var(--font-display)",
-            fontSize: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "18px 20px",
+            borderBottom: "1px solid var(--border)",
           }}
         >
-          Spending Targets
-        </div>
+          <div
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 28,
+            }}
+          >
+            Spending Targets
+          </div>
 
-        <button
-          type="button"
-          onClick={openCreateModal}
-          style={primaryBtn}
-        >
-          Add
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            style={primaryBtn}
+          >
+            Add
+          </button>
+        </div>
+      )}
 
       {modalOpen && (
         <div

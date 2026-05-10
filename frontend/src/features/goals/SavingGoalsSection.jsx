@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -301,6 +301,8 @@ function SavingHistoryPanel({
 
 export default function SavingGoalsSection({
   budgetId,
+  embedded = false,
+  createRequest = 0,
 }) {
   const {
     goals,
@@ -318,6 +320,7 @@ export default function SavingGoalsSection({
   const [expandedId, setExpandedId] = useState(null);
   const [historyCounts, setHistoryCounts] = useState({});
   const [historyPeriods, setHistoryPeriods] = useState({});
+  const lastCreateRequestRef = useRef(createRequest);
 
   const submitAndClose = async (e) => {
     e.preventDefault();
@@ -337,6 +340,14 @@ export default function SavingGoalsSection({
     setEditingId(null);
     setModalOpen(true);
   };
+
+  useEffect(() => {
+    if (createRequest === lastCreateRequestRef.current) return;
+    lastCreateRequestRef.current = createRequest;
+    resetForm();
+    setEditingId(null);
+    setModalOpen(true);
+  }, [createRequest, resetForm]);
 
   const openEditModal = (goal) => {
     setForm({
@@ -359,37 +370,39 @@ export default function SavingGoalsSection({
   return (
     <div
       style={{
-        ...cardStyle,
+        ...(embedded ? {} : cardStyle),
         padding: 0,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-          padding: "18px 20px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
+      {!embedded && (
         <div
           style={{
-            fontFamily: "var(--font-display)",
-            fontSize: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "18px 20px",
+            borderBottom: "1px solid var(--border)",
           }}
         >
-          Saving Goals
-        </div>
+          <div
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 28,
+            }}
+          >
+            Saving Goals
+          </div>
 
-        <button
-          type="button"
-          onClick={openCreateModal}
-          style={primaryBtn}
-        >
-          Add
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            style={primaryBtn}
+          >
+            Add
+          </button>
+        </div>
+      )}
 
       {modalOpen && (
         <div

@@ -217,6 +217,7 @@ export default function SpendingOverviewSection({
   startDate,
   endDate,
   onDateChange,
+  showAccounts = true,
 }) {
   const [data, setData] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -403,33 +404,35 @@ export default function SpendingOverviewSection({
         </>
       ) : (
         <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {accounts.length > 0 ? (
-              accounts.map((account) => (
-                <AccountCard key={account.id} account={account} />
-              ))
-            ) : (
-              <div
-                style={{
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 2,
-                  padding: "18px 20px",
-                  color: "var(--muted2)",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 12,
-                }}
-              >
-                No account balances detected yet. Load new Akahu transactions to capture account IDs.
-              </div>
-            )}
-          </div>
+          {showAccounts && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {accounts.length > 0 ? (
+                accounts.map((account) => (
+                  <AccountCard key={account.id} account={account} />
+                ))
+              ) : (
+                <div
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 2,
+                    padding: "18px 20px",
+                    color: "var(--muted2)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                  }}
+                >
+                  No account balances detected yet. Load new Akahu transactions to capture account IDs.
+                </div>
+              )}
+            </div>
+          )}
 
           <div
             style={{
