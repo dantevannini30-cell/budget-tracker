@@ -548,6 +548,61 @@ def get_latest_account_transaction(cursor, account_id):
     return dict(row) if row else None
 
 
+def get_account_balance_history(account_id, period="weekly", count=8, today=None):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise ValueError("Unsupported history period")
+
+    count = max(1, min(int(count or 8), 60))
+    today = today or date.today()
+
+    periods = []
+    for index in range(count - 1, -1, -1):
+        if period == "weekly":
+            end_date = today - timedelta(days=index * 7)
+            start_date = end_date - timedelta(days=6)
+            label = end_date.strftime("%d %b")
+        elif period == "monthly":
+            end_date = add_months(today, -index)
+            start_date = add_months(end_date, -1) + timedelta(days=1)
+            label = end_date.strftime("%b %Y")
+        else:
+            end_date = add_years(today, -index)
+            start_date = add_years(end_date, -1) + timedelta(days=1)
+            label = end_date.strftime("%Y")
+
+        periods.append({
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "label": label,
+        })
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    result = []
+    for item in periods:
+        end_of_day = f"{item['end_date']}T23:59:59"
+        cursor.execute("""
+            SELECT balance, date
+            FROM transactions
+            WHERE account_id = ?
+            AND balance IS NOT NULL
+            AND date <= ?
+            ORDER BY date DESC
+            LIMIT 1
+        """, (account_id, end_of_day))
+
+        row = cursor.fetchone()
+        result.append({
+            **item,
+            "balance": row["balance"] if row else None,
+            "balance_date": row["date"] if row else None,
+        })
+
+    conn.close()
+    return result
+
+
 # ---------------------------
 # SPENDING TARGETS
 # ---------------------------

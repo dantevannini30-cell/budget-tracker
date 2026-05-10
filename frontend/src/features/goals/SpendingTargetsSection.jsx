@@ -146,6 +146,7 @@ function SpendingHistoryChart({ target, transactions, count, onCountChange }) {
 
   return (
     <div
+      onClick={(e) => e.stopPropagation()}
       style={{
         marginTop: 14,
         paddingTop: 14,

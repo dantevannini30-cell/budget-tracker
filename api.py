@@ -11,6 +11,7 @@ from database import (
     ingest_transactions,
     get_latest_transaction_date,
     get_accounts,
+    get_account_balance_history,
     get_account_transactions,
     get_transactions as get_transactions_from_db,
     set_transaction_category,
@@ -352,6 +353,48 @@ def update_goal(goal_id: str, goal: SavingGoalCreate):
 @app.get("/api/saving-goals/{goal_id}/progress")
 def goal_progress(goal_id: str):
     return calculate_saving_goal_progress(goal_id)
+
+
+@app.get("/api/saving-goals/{goal_id}/account-history")
+def goal_account_history(
+    goal_id: str,
+    period: str = Query("weekly"),
+    count: int = Query(8, ge=1, le=60),
+):
+    if period not in {"weekly", "monthly", "yearly"}:
+        raise HTTPException(400, "Period must be weekly, monthly, or yearly")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT account_id
+        FROM saving_goals
+        WHERE id = ?
+    """, (goal_id,))
+
+    goal = cursor.fetchone()
+    conn.close()
+
+    if not goal:
+        raise HTTPException(404, "Saving goal not found")
+
+    if not goal["account_id"]:
+        return {
+            "goal_id": goal_id,
+            "account_id": None,
+            "period": period,
+            "count": count,
+            "points": [],
+        }
+
+    return {
+        "goal_id": goal_id,
+        "account_id": goal["account_id"],
+        "period": period,
+        "count": count,
+        "points": get_account_balance_history(goal["account_id"], period, count),
+    }
 
 
 @app.get("/api/summary")

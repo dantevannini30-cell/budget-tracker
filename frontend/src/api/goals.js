@@ -44,6 +44,15 @@ export async function getSavingGoals() {
   return handleResponse(res, "Failed to load saving goals");
 }
 
+export async function getSavingGoalAccountHistory(id, { period, count }) {
+  const params = new URLSearchParams({
+    period,
+    count: String(count),
+  });
+  const res = await fetch(`${API}/api/saving-goals/${id}/account-history?${params}`);
+  return handleResponse(res, "Failed to load saving goal account history");
+}
+
 export async function createSavingGoal(payload) {
   const res = await fetch(`${API}/api/saving-goals`, {
     method: "POST",
