@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { API } from "@/api/constants";
 import SectionShell from "@/components/SectionShell";
 import NetWorthProjectionSection from "@/features/NetWorthProjectionSection";
 import RecurringCashflowSection from "@/features/RecurringCashflowSection";
@@ -15,10 +14,6 @@ function getDefaultDates() {
   };
 }
 
-function formatMoney(value) {
-  return `$${Number(value || 0).toFixed(2)}`;
-}
-
 export default function CashflowSection() {
   const [dateRange, setDateRange] = useState(() => {
     const stored = localStorage.getItem("dashboardDateRange");
@@ -30,58 +25,16 @@ export default function CashflowSection() {
       return getDefaultDates();
     }
   });
-  const [summary, setSummary] = useState(null);
 
   useEffect(() => {
     localStorage.setItem("dashboardDateRange", JSON.stringify(dateRange));
   }, [dateRange]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSummary() {
-      try {
-        const params = new URLSearchParams();
-        if (dateRange.startDate) params.append("start_date", dateRange.startDate);
-        if (dateRange.endDate) params.append("end_date", dateRange.endDate);
-
-        const res = await fetch(`${API}/api/dashboard?${params.toString()}`);
-        if (!res.ok) throw new Error("Failed to load cashflow summary");
-        const data = await res.json();
-        if (!cancelled) setSummary(data);
-      } catch (err) {
-        console.error("Failed loading cashflow summary:", err);
-        if (!cancelled) setSummary(null);
-      }
-    }
-
-    loadSummary();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [dateRange]);
-
-  const incomeTotal = (summary?.income_summary || []).reduce(
-    (sum, item) => sum + Number(item.total || 0),
-    0
-  );
-  const expenseTotal = (summary?.summary || []).reduce(
-    (sum, item) => sum + Number(item.total || 0),
-    0
-  );
-  const net = incomeTotal - expenseTotal;
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
       <SectionShell
         title="Spending"
         description="Income, expenses, and category mix"
-        summary={[
-          { label: "Income", value: summary ? formatMoney(incomeTotal) : "-", tone: "good" },
-          { label: "Out", value: summary ? formatMoney(expenseTotal) : "-", tone: "bad" },
-          { label: "Net", value: summary ? formatMoney(net) : "-", tone: net >= 0 ? "good" : "bad" },
-        ]}
       >
         <SpendingOverviewSection
           startDate={dateRange.startDate}
@@ -95,24 +48,16 @@ export default function CashflowSection() {
         title="Recurring Cashflow"
         description="Recurring income and expense trend"
         defaultExpanded={false}
-        summary={[
-          { label: "View", value: "Weekly-monthly-yearly" },
-          { label: "Includes", value: "Recurring labels" },
-        ]}
       >
-        <RecurringCashflowSection />
+        <RecurringCashflowSection embedded />
       </SectionShell>
 
       <SectionShell
         title="Net Worth"
         description="Actual balances and projection"
         defaultExpanded={false}
-        summary={[
-          { label: "Forecast", value: "Projected" },
-          { label: "Inputs", value: "Income, spend, debts" },
-        ]}
       >
-        <NetWorthProjectionSection />
+        <NetWorthProjectionSection embedded />
       </SectionShell>
     </div>
   );

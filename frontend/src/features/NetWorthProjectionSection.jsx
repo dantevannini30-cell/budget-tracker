@@ -109,7 +109,7 @@ function Metric({ label, value, color }) {
   );
 }
 
-export default function NetWorthProjectionSection() {
+export default function NetWorthProjectionSection({ embedded = false }) {
   const [period, setPeriod] = useState("monthly");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -158,7 +158,7 @@ export default function NetWorthProjectionSection() {
   return (
     <div
       style={{
-        ...cardStyle,
+        ...(embedded ? {} : cardStyle),
         padding: 0,
       }}
     >
@@ -166,20 +166,22 @@ export default function NetWorthProjectionSection() {
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: embedded ? "flex-end" : "space-between",
           gap: 16,
-          padding: "18px 20px",
-          borderBottom: "1px solid var(--border)",
+          padding: embedded ? "0 0 14px" : "18px 20px",
+          borderBottom: embedded ? "none" : "1px solid var(--border)",
         }}
       >
-        <div
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: 28,
-          }}
-        >
-          Net Worth Projection
-        </div>
+        {!embedded && (
+          <div
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 28,
+            }}
+          >
+            Net Worth Projection
+          </div>
+        )}
 
         <select
           value={period}
@@ -197,7 +199,7 @@ export default function NetWorthProjectionSection() {
         </select>
       </div>
 
-      <div style={{ padding: 20, display: "grid", gap: 16 }}>
+      <div style={{ padding: embedded ? 0 : 20, display: "grid", gap: 16 }}>
         <div
           style={{
             display: "grid",
