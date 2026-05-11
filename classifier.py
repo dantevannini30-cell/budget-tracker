@@ -4,7 +4,8 @@ import time
 import urllib.error
 import urllib.request
 # change the import at the top — add the two new db helpers
-from database import DEFAULT_USER_ID, get_known_categories, get_similar_examples
+from database import DEFAULT_USER_ID, get_known_categories
+from embeddings import get_similar_examples
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")

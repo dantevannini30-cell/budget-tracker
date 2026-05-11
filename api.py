@@ -42,18 +42,20 @@ from database import (
     get_debts,
     create_debt_payment,
     delete_debt_payment,
-    create_investment,
-    update_investment,
-    delete_investment,
-    get_investments,
-    create_investment_value,
-    delete_investment_value,
     create_category_allocation,
     delete_category_allocation,
     get_category_allocations,
     apply_allocations_to_category_totals,
 )
 
+from investments import (
+    create_investment,
+    update_investment,
+    delete_investment,
+    get_investments,
+    create_investment_value,
+    delete_investment_value,
+)
 from utils import (
     calculate_spending_target_progress,
     calculate_saving_goal_progress,
