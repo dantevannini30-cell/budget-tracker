@@ -4,7 +4,7 @@ import time
 import urllib.error
 import urllib.request
 # change the import at the top — add the two new db helpers
-from database import get_known_categories, get_similar_examples
+from database import DEFAULT_USER_ID, get_known_categories, get_similar_examples
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
@@ -28,12 +28,12 @@ You will also be given examples of correctly classified transactions. Use these 
 """.strip()
 
 
-def get_additional_classification_context(txn):
+def get_additional_classification_context(txn, user_id):
     statement = txn.get("statement") or txn.get("description") or ""
     amount = txn.get("amount")
 
-    categories = get_known_categories()
-    examples = get_similar_examples(statement, amount=amount, limit=10)
+    categories = get_known_categories(user_id)
+    examples = get_similar_examples(statement, user_id=user_id, amount=amount, limit=10)
 
     return {
         "existing_categories": categories,
@@ -42,7 +42,7 @@ def get_additional_classification_context(txn):
 
 from database import get_connection
 
-def get_existing_classification(statement):
+def get_existing_classification(statement, user_id):
     """
     Checks the DB for a human-verified classification for an identical statement.
     """
@@ -57,31 +57,34 @@ def get_existing_classification(statement):
     query = """
         SELECT tc.category 
         FROM transactions t
-        JOIN transaction_classifications tc ON t.id = tc.transaction_id
-        WHERE t.statement = ? 
+        JOIN transaction_classifications tc
+            ON tc.user_id = t.user_id
+            AND t.id = tc.transaction_id
+        WHERE t.user_id = ?
+          AND t.statement = ?
           AND (tc.status = 'accepted' OR tc.status = 'manual')
         ORDER BY tc.updated_at DESC
         LIMIT 1
     """
     
     try:
-        cursor.execute(query, (statement,))
+        cursor.execute(query, (user_id, statement))
         row = cursor.fetchone()
         return row[0] if row else None
     finally:
         conn.close()
 
-def classify_transaction(txn):
+def classify_transaction(txn, user_id=DEFAULT_USER_ID):
     statement = txn.get("statement") or txn.get("description") or ""
     
     # --- NEW STEP: Exact Match Look-up ---
-    existing_category = get_existing_classification(statement)
+    existing_category = get_existing_classification(statement, user_id)
     if existing_category:
         print(f"[classifier] cache hit for {txn.get('id')}: {existing_category}")
         return existing_category
     # -------------------------------------
 
-    context = get_additional_classification_context(txn)
+    context = get_additional_classification_context(txn, user_id)
 
     if not statement.strip():
         print(f"[classifier] skip {txn.get('id')}: empty statement")
@@ -278,9 +281,10 @@ def run_test_suite(limit=10):
     cursor.execute("""
         SELECT id, statement, description, amount 
         FROM transactions 
+        WHERE user_id = ?
         ORDER BY date DESC 
         LIMIT ?
-    """, (limit,))
+    """, (DEFAULT_USER_ID, limit))
     
     test_txns = cursor.fetchall()
     
@@ -294,7 +298,7 @@ def run_test_suite(limit=10):
         }
         
         # Run your classification logic
-        category = classify_transaction(txn_data)
+        category = classify_transaction(txn_data, user_id=DEFAULT_USER_ID)
         
         results.append({
             "statement": txn_data["statement"],

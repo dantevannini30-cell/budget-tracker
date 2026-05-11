@@ -43,30 +43,34 @@ def clean_transactions(transactions):
 # SPENDING TARGET PROGRESS
 # ---------------------------
 
-def calculate_spending_target_progress(target_id):
+def calculate_spending_target_progress(user_id, target_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT name, amount, period, start_date
         FROM spending_targets
-        WHERE id = ?
-    """, (target_id,))
+        WHERE user_id = ?
+        AND id = ?
+    """, (user_id, target_id))
 
     target = cursor.fetchone()
 
     if not target:
+        conn.close()
         return {"spent": 0, "target": 0, "remaining": 0, "pct": 0}
 
     cursor.execute("""
         SELECT category
         FROM spending_target_categories
-        WHERE target_id = ?
-    """, (target_id,))
+        WHERE user_id = ?
+        AND target_id = ?
+    """, (user_id, target_id))
 
     categories = [r["category"] for r in cursor.fetchall()]
 
     if not categories:
+        conn.close()
         return {"spent": 0, "target": target["amount"], "remaining": target["amount"], "pct": 0}
 
     start = get_current_period_start(target["start_date"], target["period"])
@@ -74,12 +78,16 @@ def calculate_spending_target_progress(target_id):
     placeholders = ",".join(["?"] * len(categories))
 
     cursor.execute(f"""
-        SELECT COALESCE(SUM(ABS(amount)), 0)
-        FROM transactions
-        WHERE amount < 0
-        AND category IN ({placeholders})
-        AND date >= ?
-    """, categories + [start])
+        SELECT COALESCE(SUM(ABS(t.amount)), 0)
+        FROM transactions t
+        LEFT JOIN transaction_classifications c
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
+        AND t.amount < 0
+        AND COALESCE(NULLIF(c.category, ''), t.category, '') IN ({placeholders})
+        AND t.date >= ?
+    """, [user_id] + categories + [start])
 
     spent = cursor.fetchone()[0] or 0
 
@@ -98,15 +106,16 @@ def calculate_spending_target_progress(target_id):
 # ---------------------------
 # SAVING GOAL PROGRESS
 # ---------------------------
-def calculate_saving_goal_progress(goal_id):
+def calculate_saving_goal_progress(user_id, goal_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT target_amount, current_amount
         FROM saving_goals
-        WHERE id = ?
-    """, (goal_id,))
+        WHERE user_id = ?
+        AND id = ?
+    """, (user_id, goal_id))
 
     goal = cursor.fetchone()
     conn.close()

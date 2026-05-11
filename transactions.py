@@ -1,17 +1,17 @@
 import uuid
-from database import get_connection
+from database import DEFAULT_USER_ID, get_connection
 
 
-def add_transaction(amount, category, date):
+def add_transaction(amount, category, date, user_id=DEFAULT_USER_ID):
     conn = get_connection()
     cursor = conn.cursor()
 
     txn_id = uuid.uuid4().hex
 
     cursor.execute("""
-        INSERT INTO transactions (id, amount, category, date)
-        VALUES (?, ?, ?, ?)
-    """, (txn_id, amount, category, date))
+        INSERT INTO transactions (user_id, id, amount, category, date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, txn_id, amount, category, date))
 
     conn.commit()
     conn.close()
@@ -24,11 +24,14 @@ def add_transaction(amount, category, date):
     }
 
 
-def get_transactions():
+def get_transactions(user_id=DEFAULT_USER_ID):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM transactions ORDER BY date DESC")
+    cursor.execute(
+        "SELECT * FROM transactions WHERE user_id = ? ORDER BY date DESC",
+        (user_id,),
+    )
     rows = cursor.fetchall()
 
     conn.close()
