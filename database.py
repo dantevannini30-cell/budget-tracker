@@ -174,6 +174,32 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS investments (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+            name TEXT,
+            type TEXT,
+            start_date TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS investment_values (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+            investment_id TEXT,
+            amount REAL,
+            value_date TEXT,
+            note TEXT,
+            source TEXT,
+            created_at TEXT
+        )
+    """)
+
     seed_default_user(cursor)
     migrate_user_scoped_primary_keys(cursor)
 
@@ -189,6 +215,8 @@ def init_db():
         "debts",
         "debt_payments",
         "transaction_allocations",
+        "investments",
+        "investment_values",
     ):
         ensure_column(
             cursor,
@@ -216,6 +244,15 @@ def init_db():
     ensure_column(cursor, "debts", "created_at", "TEXT")
     ensure_column(cursor, "debts", "updated_at", "TEXT")
     ensure_column(cursor, "transaction_allocations", "allocation_date", "TEXT")
+    ensure_column(cursor, "investments", "type", "TEXT")
+    ensure_column(cursor, "investments", "start_date", "TEXT")
+    ensure_column(cursor, "investments", "active", "INTEGER DEFAULT 1")
+    ensure_column(cursor, "investments", "created_at", "TEXT")
+    ensure_column(cursor, "investments", "updated_at", "TEXT")
+    ensure_column(cursor, "investment_values", "value_date", "TEXT")
+    ensure_column(cursor, "investment_values", "note", "TEXT")
+    ensure_column(cursor, "investment_values", "source", "TEXT")
+    ensure_column(cursor, "investment_values", "created_at", "TEXT")
 
     backfill_user_ids(cursor)
     create_user_scoped_indexes(cursor)
@@ -431,6 +468,8 @@ def backfill_user_ids(cursor):
         "debts",
         "debt_payments",
         "transaction_allocations",
+        "investments",
+        "investment_values",
     ):
         cursor.execute(
             f"UPDATE {table_name} SET user_id = ? WHERE user_id IS NULL OR user_id = ''",
@@ -449,6 +488,8 @@ def create_user_scoped_indexes(cursor):
         "CREATE INDEX IF NOT EXISTS idx_recurring_rules_user_category ON recurring_rules(user_id, category)",
         "CREATE INDEX IF NOT EXISTS idx_debts_user_active ON debts(user_id, active)",
         "CREATE INDEX IF NOT EXISTS idx_transaction_allocations_user_date ON transaction_allocations(user_id, allocation_date)",
+        "CREATE INDEX IF NOT EXISTS idx_investments_user_active ON investments(user_id, active)",
+        "CREATE INDEX IF NOT EXISTS idx_investment_values_user_investment_date ON investment_values(user_id, investment_id, value_date)",
     ]
 
     for statement in statements:
@@ -1904,16 +1945,19 @@ def get_net_worth_projection(user_id, period="monthly", history_count=12, future
     """, (user_id,))
     account_ids = [row["account_id"] for row in cursor.fetchall()]
     debt_by_week = get_debt_remaining_by_week(cursor, user_id, today, history_count)
+    investment_by_week = get_investment_value_by_week(cursor, user_id, today, history_count)
 
     history_periods = build_weekly_projection_periods(today, history_count)
     history_points = []
     for item in history_periods:
         account_balance = get_net_worth_at_date(cursor, user_id, account_ids, item["end_date"])
         debt_remaining = debt_by_week.get(item["end_date"], 0)
+        investment_value = investment_by_week.get(item["end_date"], 0)
         history_points.append({
             **item,
-            "balance": account_balance - debt_remaining,
+            "balance": account_balance + investment_value - debt_remaining,
             "account_balance": account_balance,
+            "investment_value": investment_value,
             "debt_remaining": debt_remaining,
             "projected": False,
         })
@@ -1958,8 +2002,9 @@ def get_net_worth_projection(user_id, period="monthly", history_count=12, future
     weekly_spending = averages["average_spending"] / weeks_per_period(period)
 
     current_account_balance = get_net_worth_at_date(cursor, user_id, account_ids, today.isoformat())
+    current_investment_value = get_current_investment_value(cursor, user_id)
     current_debt_remaining = get_active_debt_remaining(cursor, user_id)
-    current_balance = current_account_balance - current_debt_remaining
+    current_balance = current_account_balance + current_investment_value - current_debt_remaining
     projection_points = []
     balance = current_balance
     cursor_date = today
@@ -1973,6 +2018,7 @@ def get_net_worth_projection(user_id, period="monthly", history_count=12, future
             "label": format_projection_label(cursor_date, "weekly"),
             "balance": balance,
             "account_balance": None,
+            "investment_value": None,
             "debt_remaining": None,
             "projected": True,
         })
@@ -1986,6 +2032,7 @@ def get_net_worth_projection(user_id, period="monthly", history_count=12, future
         "future_count": future_count,
         "current_balance": current_balance,
         "current_account_balance": current_account_balance,
+        "current_investment_value": current_investment_value,
         "current_debt_remaining": current_debt_remaining,
         "average_income": averages["average_income"],
         "average_spending": averages["average_spending"],
@@ -1997,6 +2044,241 @@ def get_net_worth_projection(user_id, period="monthly", history_count=12, future
         "recurring_expense_categories": recurring_categories,
         "points": history_points + projection_points,
     }
+
+
+# ---------------------------
+# INVESTMENTS
+# ---------------------------
+
+def create_investment(user_id, name, type=None, start_date=None, active=True):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    investment_id = uuid.uuid4().hex
+    timestamp = now_iso()
+    start_date = start_date or today_iso()
+
+    cursor.execute("""
+        INSERT INTO investments (
+            id, user_id, name, type, start_date, active, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        investment_id,
+        user_id,
+        name,
+        (type or "").strip(),
+        start_date,
+        1 if active else 0,
+        timestamp,
+        timestamp,
+    ))
+
+    conn.commit()
+    conn.close()
+    return get_investment(user_id, investment_id)
+
+
+def update_investment(user_id, investment_id, name, type=None, start_date=None, active=True):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE investments
+        SET
+            name = ?,
+            type = ?,
+            start_date = ?,
+            active = ?,
+            updated_at = ?
+        WHERE id = ?
+        AND user_id = ?
+    """, (
+        name,
+        (type or "").strip(),
+        start_date or today_iso(),
+        1 if active else 0,
+        now_iso(),
+        investment_id,
+        user_id,
+    ))
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return None
+
+    conn.commit()
+    conn.close()
+    return get_investment(user_id, investment_id)
+
+
+def delete_investment(user_id, investment_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM investment_values WHERE user_id = ? AND investment_id = ?",
+        (user_id, investment_id),
+    )
+    cursor.execute("DELETE FROM investments WHERE user_id = ? AND id = ?", (user_id, investment_id))
+
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def create_investment_value(user_id, investment_id, amount, value_date=None, note=None, source="manual"):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM investments WHERE user_id = ? AND id = ?", (user_id, investment_id))
+    if not cursor.fetchone():
+        conn.close()
+        return None
+
+    value_id = uuid.uuid4().hex
+    cursor.execute("""
+        INSERT INTO investment_values (
+            id, user_id, investment_id, amount, value_date, note, source, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        value_id,
+        user_id,
+        investment_id,
+        amount,
+        value_date or today_iso(),
+        note or "",
+        (source or "manual").strip() or "manual",
+        now_iso(),
+    ))
+
+    conn.commit()
+    conn.close()
+    return get_investment(user_id, investment_id)
+
+
+def delete_investment_value(user_id, investment_id, value_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM investment_values
+        WHERE user_id = ?
+        AND id = ?
+        AND investment_id = ?
+    """, (user_id, value_id, investment_id))
+
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def get_investment(user_id, investment_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM investments WHERE user_id = ? AND id = ?", (user_id, investment_id))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return None
+
+    investment = enrich_investment(cursor, user_id, dict(row))
+    conn.close()
+    return investment
+
+
+def get_investments(user_id, active_only=False):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM investments WHERE user_id = ?"
+    params = [user_id]
+
+    if active_only:
+        query += " AND active = ?"
+        params.append(1)
+
+    query += " ORDER BY active DESC, name COLLATE NOCASE ASC"
+
+    cursor.execute(query, params)
+    investments = [enrich_investment(cursor, user_id, dict(row)) for row in cursor.fetchall()]
+
+    conn.close()
+    return investments
+
+
+def enrich_investment(cursor, user_id, investment):
+    values = get_investment_values(cursor, user_id, investment["id"])
+    latest = values[0] if values else None
+
+    return {
+        **investment,
+        "active": bool(investment.get("active")),
+        "values": values,
+        "latest_value": float(latest["amount"] or 0) if latest else 0,
+        "latest_value_date": latest["value_date"] if latest else None,
+        "latest_value_source": latest["source"] if latest else None,
+    }
+
+
+def get_investment_values(cursor, user_id, investment_id):
+    cursor.execute("""
+        SELECT id, investment_id, amount, value_date, note, source, created_at
+        FROM investment_values
+        WHERE user_id = ?
+        AND investment_id = ?
+        ORDER BY value_date DESC, created_at DESC
+    """, (user_id, investment_id))
+
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_current_investment_value(cursor, user_id):
+    return get_investment_value_at_date(cursor, user_id, today_iso())
+
+
+def get_investment_value_by_week(cursor, user_id, today, history_count):
+    periods = build_weekly_projection_periods(today, history_count)
+    return {
+        period["end_date"]: get_investment_value_at_date(cursor, user_id, period["end_date"])
+        for period in periods
+    }
+
+
+def get_investment_value_at_date(cursor, user_id, end_date):
+    cursor.execute("""
+        SELECT id, start_date
+        FROM investments
+        WHERE user_id = ?
+        AND active = 1
+    """, (user_id,))
+    investments = [dict(row) for row in cursor.fetchall()]
+
+    total = 0
+    for investment in investments:
+        if investment.get("start_date") and investment["start_date"] > end_date:
+            continue
+
+        cursor.execute("""
+            SELECT amount
+            FROM investment_values
+            WHERE user_id = ?
+            AND investment_id = ?
+            AND value_date <= ?
+            ORDER BY value_date DESC, created_at DESC
+            LIMIT 1
+        """, (user_id, investment["id"], end_date))
+
+        row = cursor.fetchone()
+        if row and row["amount"] is not None:
+            total += float(row["amount"] or 0)
+
+    return total
 
 
 # ---------------------------

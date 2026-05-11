@@ -216,6 +216,11 @@ export default function NetWorthProjectionSection() {
             color="var(--green)"
           />
           <Metric
+            label="Investments"
+            value={loading ? "-" : formatMoney(data?.current_investment_value)}
+            color="var(--accent)"
+          />
+          <Metric
             label="Debt remaining"
             value={loading ? "-" : formatMoney(data?.current_debt_remaining)}
             color="var(--red)"

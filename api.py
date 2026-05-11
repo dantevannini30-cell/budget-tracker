@@ -42,6 +42,12 @@ from database import (
     get_debts,
     create_debt_payment,
     delete_debt_payment,
+    create_investment,
+    update_investment,
+    delete_investment,
+    get_investments,
+    create_investment_value,
+    delete_investment_value,
     create_category_allocation,
     delete_category_allocation,
     get_category_allocations,
@@ -149,6 +155,20 @@ class DebtPaymentCreate(BaseModel):
     amount: float
     payment_date: str | None = None
     note: str | None = None
+
+
+class InvestmentCreate(BaseModel):
+    name: str
+    type: str | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class InvestmentValueCreate(BaseModel):
+    amount: float
+    value_date: str | None = None
+    note: str | None = None
+    source: str = "manual"
 
 
 class TransactionAllocationCreate(BaseModel):
@@ -697,6 +717,89 @@ def delete_debt_payment_endpoint(
 
     debt = get_debts(user_id)
     return {"message": "deleted", "debts": debt}
+
+
+# ---------------------------
+# INVESTMENTS
+# ---------------------------
+
+@app.get("/api/investments")
+def list_investments(active_only: bool = Query(False), user_id: str = Depends(get_user_id)):
+    return get_investments(user_id, active_only)
+
+
+@app.post("/api/investments")
+def create_investment_endpoint(investment: InvestmentCreate, user_id: str = Depends(get_user_id)):
+    return create_investment(
+        user_id,
+        investment.name,
+        investment.type,
+        investment.start_date,
+        investment.active,
+    )
+
+
+@app.put("/api/investments/{investment_id}")
+def update_investment_endpoint(
+    investment_id: str,
+    investment: InvestmentCreate,
+    user_id: str = Depends(get_user_id),
+):
+    updated = update_investment(
+        user_id,
+        investment_id,
+        investment.name,
+        investment.type,
+        investment.start_date,
+        investment.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Investment not found")
+
+    return updated
+
+
+@app.delete("/api/investments/{investment_id}")
+def delete_investment_endpoint(investment_id: str, user_id: str = Depends(get_user_id)):
+    if not delete_investment(user_id, investment_id):
+        raise HTTPException(404, "Investment not found")
+
+    return {"message": "deleted"}
+
+
+@app.post("/api/investments/{investment_id}/values")
+def create_investment_value_endpoint(
+    investment_id: str,
+    value: InvestmentValueCreate,
+    user_id: str = Depends(get_user_id),
+):
+    investment = create_investment_value(
+        user_id,
+        investment_id,
+        value.amount,
+        value.value_date,
+        value.note,
+        value.source,
+    )
+
+    if not investment:
+        raise HTTPException(404, "Investment not found")
+
+    return investment
+
+
+@app.delete("/api/investments/{investment_id}/values/{value_id}")
+def delete_investment_value_endpoint(
+    investment_id: str,
+    value_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    if not delete_investment_value(user_id, investment_id, value_id):
+        raise HTTPException(404, "Investment value not found")
+
+    investments = get_investments(user_id)
+    return {"message": "deleted", "investments": investments}
 
 
 # ---------------------------
