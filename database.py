@@ -8,7 +8,7 @@ import urllib.error
 import os
 
 from transaction_identity import get_external_transaction_id, get_transaction_id
-
+from investments import get_investment_value_by_week, get_current_investment_value
 DB_FILE = "transactions.db"
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 DEFAULT_CLASSIFICATION_BATCH_SIZE = 10
