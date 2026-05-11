@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from main import fetch_in_range
 from utils import clean_transactions
 from database import (
+    DEFAULT_USER_ID,
     init_db,
     get_connection,
     ingest_transactions,
@@ -47,6 +48,14 @@ from database import (
     apply_allocations_to_category_totals,
 )
 
+from investments import (
+    create_investment,
+    update_investment,
+    delete_investment,
+    get_investments,
+    create_investment_value,
+    delete_investment_value,
+)
 from utils import (
     calculate_spending_target_progress,
     calculate_saving_goal_progress,
@@ -66,6 +75,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_user_id(x_user_id: str | None = Header(default=None)):
+    return (x_user_id or DEFAULT_USER_ID).strip() or DEFAULT_USER_ID
 
 @app.on_event("startup")
 def startup():
@@ -146,6 +159,20 @@ class DebtPaymentCreate(BaseModel):
     note: str | None = None
 
 
+class InvestmentCreate(BaseModel):
+    name: str
+    type: str | None = None
+    start_date: str | None = None
+    active: bool = True
+
+
+class InvestmentValueCreate(BaseModel):
+    amount: float
+    value_date: str | None = None
+    note: str | None = None
+    source: str = "manual"
+
+
 class TransactionAllocationCreate(BaseModel):
     from_category: str
     to_category: str
@@ -175,25 +202,25 @@ def utc_now_for_akahu():
 
 
 @app.post("/api/transactions/load")
-def load_transactions(req: LoadTransactionsRequest):
+def load_transactions(req: LoadTransactionsRequest, user_id: str = Depends(get_user_id)):
 
     transactions = fetch_in_range(req.start_date, req.end_date or utc_now_for_akahu())
     cleaned = clean_transactions(transactions)
-    inserted_ids = set(ingest_transactions(cleaned))
+    inserted_ids = set(ingest_transactions(cleaned, user_id))
 
     return [txn for txn in cleaned if txn["id"] in inserted_ids]
 
 
 @app.post("/api/transactions/refresh")
-def refresh_transactions():
-    latest_date = get_latest_transaction_date()
+def refresh_transactions(user_id: str = Depends(get_user_id)):
+    latest_date = get_latest_transaction_date(user_id)
 
     if not latest_date:
         raise HTTPException(400, "No existing transactions. Choose a start date first.")
 
     transactions = fetch_in_range(latest_date, utc_now_for_akahu())
     cleaned = clean_transactions(transactions)
-    inserted_ids = set(ingest_transactions(cleaned))
+    inserted_ids = set(ingest_transactions(cleaned, user_id))
 
     return {
         "start_date": latest_date,
@@ -202,33 +229,36 @@ def refresh_transactions():
 
 
 @app.get("/api/transactions")
-def get_transactions():
-    return get_transactions_from_db()
+def get_transactions(user_id: str = Depends(get_user_id)):
+    return get_transactions_from_db(user_id)
 
 
 @app.post("/api/transactions/classify")
-def classify_transactions(req: ClassifyTransactionsRequest | None = None):
+def classify_transactions(
+    req: ClassifyTransactionsRequest | None = None,
+    user_id: str = Depends(get_user_id),
+):
     req = req or ClassifyTransactionsRequest()
-    classified = classify_unset_transactions(req.limit, req.batch_size)
+    classified = classify_unset_transactions(user_id, req.limit, req.batch_size)
     return {
         "classified": classified,
-        "transactions": get_transactions_from_db(),
+        "transactions": get_transactions_from_db(user_id),
     }
 
 
 @app.get("/api/accounts")
-def list_accounts():
-    return get_accounts()
+def list_accounts(user_id: str = Depends(get_user_id)):
+    return get_accounts(user_id)
 
 
 @app.get("/api/accounts/{account_id}/transactions")
-def list_account_transactions(account_id: str):
-    return get_account_transactions(account_id)
+def list_account_transactions(account_id: str, user_id: str = Depends(get_user_id)):
+    return get_account_transactions(user_id, account_id)
 
 
 @app.put("/api/accounts/{account_id}")
-def rename_account(account_id: str, update: AccountUpdate):
-    account = update_account_name(account_id, update.name)
+def rename_account(account_id: str, update: AccountUpdate, user_id: str = Depends(get_user_id)):
+    account = update_account_name(user_id, account_id, update.name)
 
     if not account:
         raise HTTPException(404, "Account not found")
@@ -237,7 +267,11 @@ def rename_account(account_id: str, update: AccountUpdate):
 
 
 @app.put("/api/transactions/{transaction_id}")
-def update_transaction(transaction_id: str, update: TransactionUpdate):
+def update_transaction(
+    transaction_id: str,
+    update: TransactionUpdate,
+    user_id: str = Depends(get_user_id),
+):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -255,9 +289,11 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
         query = f"""
             UPDATE transactions
             SET {', '.join(updates)}
-            WHERE id = ?
+            WHERE user_id = ?
+            AND id = ?
         """
 
+        params.append(user_id)
         params.append(transaction_id)
 
         cursor.execute(query, params)
@@ -269,26 +305,26 @@ def update_transaction(transaction_id: str, update: TransactionUpdate):
     conn.close()
 
     if update.category is not None:
-        if not set_transaction_category(transaction_id, update.category, "human", "user"):
+        if not set_transaction_category(user_id, transaction_id, update.category, "human", "user"):
             raise HTTPException(404, "Transaction not found")
 
     return {"message": "updated"}
 
 
 @app.post("/api/transactions/{transaction_id}/category/accept")
-def accept_transaction_classification(transaction_id: str):
-    if not accept_transaction_category(transaction_id, "user"):
+def accept_transaction_classification(transaction_id: str, user_id: str = Depends(get_user_id)):
+    if not accept_transaction_category(user_id, transaction_id, "user"):
         raise HTTPException(404, "Suggested category not found")
 
     return {"message": "accepted"}
 
 
 @app.post("/api/transactions/category/accept-suggested")
-def accept_suggested_transaction_classifications():
-    accepted_count = accept_all_suggested_transaction_categories("user")
+def accept_suggested_transaction_classifications(user_id: str = Depends(get_user_id)):
+    accepted_count = accept_all_suggested_transaction_categories(user_id, "user")
     return {
         "accepted": accepted_count,
-        "transactions": get_transactions_from_db(),
+        "transactions": get_transactions_from_db(user_id),
     }
 
 
@@ -298,7 +334,7 @@ def accept_suggested_transaction_classifications():
 
 
 @app.get("/api/summary/by-category")
-def by_category():
+def by_category(user_id: str = Depends(get_user_id)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -308,20 +344,22 @@ def by_category():
             SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
         GROUP BY 1
         HAVING total > 0
         ORDER BY total DESC
-    """)
+    """, (user_id,))
 
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
 
-    return apply_allocations_to_category_totals(rows)
+    return apply_allocations_to_category_totals(user_id, rows)
 
 
 @app.get("/api/summary/by-category/income")
-def by_category_income():
+def by_category_income(user_id: str = Depends(get_user_id)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -331,11 +369,13 @@ def by_category_income():
             SUM(t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
         GROUP BY 1
         HAVING total > 0
         ORDER BY total DESC
-    """)
+    """, (user_id,))
 
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
@@ -349,13 +389,14 @@ def by_category_income():
 
 
 @app.get("/api/spending-targets")
-def list_targets():
-    return get_spending_targets_with_progress()
+def list_targets(user_id: str = Depends(get_user_id)):
+    return get_spending_targets_with_progress(user_id)
 
 
 @app.post("/api/spending-targets")
-def create_target(target: SpendingTargetCreate):
+def create_target(target: SpendingTargetCreate, user_id: str = Depends(get_user_id)):
     return create_spending_target(
+        user_id,
         target.name,
         target.amount,
         target.period,
@@ -365,8 +406,9 @@ def create_target(target: SpendingTargetCreate):
 
 
 @app.put("/api/spending-targets/{target_id}")
-def update_target(target_id: str, target: SpendingTargetCreate):
+def update_target(target_id: str, target: SpendingTargetCreate, user_id: str = Depends(get_user_id)):
     updated = update_spending_target(
+        user_id,
         target_id,
         target.name,
         target.amount,
@@ -382,8 +424,8 @@ def update_target(target_id: str, target: SpendingTargetCreate):
 
 
 @app.get("/api/spending-targets/{target_id}/progress")
-def target_progress(target_id: str):
-    return calculate_spending_target_progress(target_id)
+def target_progress(target_id: str, user_id: str = Depends(get_user_id)):
+    return calculate_spending_target_progress(user_id, target_id)
 
 
 # ---------------------------
@@ -391,13 +433,14 @@ def target_progress(target_id: str):
 # ---------------------------
 
 @app.get("/api/saving-goals")
-def list_goals():
-    return get_saving_goals()
+def list_goals(user_id: str = Depends(get_user_id)):
+    return get_saving_goals(user_id)
 
 
 @app.post("/api/saving-goals")
-def create_goal(goal: SavingGoalCreate):
+def create_goal(goal: SavingGoalCreate, user_id: str = Depends(get_user_id)):
     return create_saving_goal(
+        user_id,
         goal.name,
         goal.target_amount,
         goal.current_amount,
@@ -407,8 +450,9 @@ def create_goal(goal: SavingGoalCreate):
 
 
 @app.put("/api/saving-goals/{goal_id}")
-def update_goal(goal_id: str, goal: SavingGoalCreate):
+def update_goal(goal_id: str, goal: SavingGoalCreate, user_id: str = Depends(get_user_id)):
     updated = update_saving_goal(
+        user_id,
         goal_id,
         goal.name,
         goal.target_amount,
@@ -424,8 +468,8 @@ def update_goal(goal_id: str, goal: SavingGoalCreate):
 
 
 @app.get("/api/saving-goals/{goal_id}/progress")
-def goal_progress(goal_id: str):
-    return calculate_saving_goal_progress(goal_id)
+def goal_progress(goal_id: str, user_id: str = Depends(get_user_id)):
+    return calculate_saving_goal_progress(user_id, goal_id)
 
 
 @app.get("/api/saving-goals/{goal_id}/account-history")
@@ -433,6 +477,7 @@ def goal_account_history(
     goal_id: str,
     period: str = Query("weekly"),
     count: int = Query(8, ge=1, le=260),
+    user_id: str = Depends(get_user_id),
 ):
     if period not in {"weekly", "monthly", "yearly"}:
         raise HTTPException(400, "Period must be weekly, monthly, or yearly")
@@ -443,8 +488,9 @@ def goal_account_history(
     cursor.execute("""
         SELECT account_id
         FROM saving_goals
-        WHERE id = ?
-    """, (goal_id,))
+        WHERE user_id = ?
+        AND id = ?
+    """, (user_id, goal_id))
 
     goal = cursor.fetchone()
     conn.close()
@@ -466,7 +512,7 @@ def goal_account_history(
         "account_id": goal["account_id"],
         "period": period,
         "count": count,
-        "points": get_account_balance_history(goal["account_id"], period, count),
+        "points": get_account_balance_history(user_id, goal["account_id"], period, count),
     }
 
 
@@ -486,14 +532,15 @@ def validate_recurring_rule(rule: RecurringRuleCreate):
 
 
 @app.get("/api/recurring-rules")
-def list_recurring_rules(active_only: bool = Query(False)):
-    return get_recurring_rules(active_only)
+def list_recurring_rules(active_only: bool = Query(False), user_id: str = Depends(get_user_id)):
+    return get_recurring_rules(user_id, active_only)
 
 
 @app.post("/api/recurring-rules")
-def create_recurring(rule: RecurringRuleCreate):
+def create_recurring(rule: RecurringRuleCreate, user_id: str = Depends(get_user_id)):
     validate_recurring_rule(rule)
     return create_recurring_rule(
+        user_id,
         rule.name,
         rule.type,
         rule.period,
@@ -506,9 +553,10 @@ def create_recurring(rule: RecurringRuleCreate):
 
 
 @app.put("/api/recurring-rules/{rule_id}")
-def update_recurring(rule_id: str, rule: RecurringRuleCreate):
+def update_recurring(rule_id: str, rule: RecurringRuleCreate, user_id: str = Depends(get_user_id)):
     validate_recurring_rule(rule)
     updated = update_recurring_rule(
+        user_id,
         rule_id,
         rule.name,
         rule.type,
@@ -527,8 +575,8 @@ def update_recurring(rule_id: str, rule: RecurringRuleCreate):
 
 
 @app.delete("/api/recurring-rules/{rule_id}")
-def remove_recurring(rule_id: str):
-    if not delete_recurring_rule(rule_id):
+def remove_recurring(rule_id: str, user_id: str = Depends(get_user_id)):
+    if not delete_recurring_rule(user_id, rule_id):
         raise HTTPException(404, "Recurring rule not found")
 
     return {"message": "deleted"}
@@ -539,18 +587,18 @@ def remove_recurring(rule_id: str):
 # ---------------------------
 
 @app.get("/api/categories")
-def list_categories():
-    return get_categories_with_recurring()
+def list_categories(user_id: str = Depends(get_user_id)):
+    return get_categories_with_recurring(user_id)
 
 
 @app.get("/api/categories/{category}/transactions")
-def list_category_transactions(category: str):
-    return get_category_transactions(category)
+def list_category_transactions(category: str, user_id: str = Depends(get_user_id)):
+    return get_category_transactions(user_id, category)
 
 
 @app.put("/api/categories/recurring")
-def update_category_recurring(update: CategoryRecurringUpdate):
-    category = set_category_recurring(update.category, update.active)
+def update_category_recurring(update: CategoryRecurringUpdate, user_id: str = Depends(get_user_id)):
+    category = set_category_recurring(user_id, update.category, update.active)
 
     if not category:
         raise HTTPException(404, "Category not found")
@@ -559,8 +607,8 @@ def update_category_recurring(update: CategoryRecurringUpdate):
 
 
 @app.put("/api/categories/income")
-def update_category_income(update: CategoryIncomeUpdate):
-    category = set_category_income(update.category, update.active)
+def update_category_income(update: CategoryIncomeUpdate, user_id: str = Depends(get_user_id)):
+    category = set_category_income(user_id, update.category, update.active)
 
     if not category:
         raise HTTPException(404, "Category not found")
@@ -573,22 +621,24 @@ def net_worth_projection(
     period: str = Query("monthly"),
     history_count: int = Query(52, ge=1, le=261),
     future_count: int = Query(52, ge=1, le=261),
+    user_id: str = Depends(get_user_id),
 ):
     if period not in {"weekly", "monthly", "yearly"}:
         raise HTTPException(400, "Period must be weekly, monthly, or yearly")
 
-    return get_net_worth_projection(period, history_count, future_count)
+    return get_net_worth_projection(user_id, period, history_count, future_count)
 
 
 @app.get("/api/recurring-cashflow/history")
 def recurring_cashflow_history(
     period: str = Query("monthly"),
     count: int = Query(12, ge=1, le=60),
+    user_id: str = Depends(get_user_id),
 ):
     if period not in {"weekly", "monthly", "yearly"}:
         raise HTTPException(400, "Period must be weekly, monthly, or yearly")
 
-    return get_recurring_cashflow_history(period, count)
+    return get_recurring_cashflow_history(user_id, period, count)
 
 
 # ---------------------------
@@ -596,13 +646,14 @@ def recurring_cashflow_history(
 # ---------------------------
 
 @app.get("/api/debts")
-def list_debts(active_only: bool = Query(False)):
-    return get_debts(active_only)
+def list_debts(active_only: bool = Query(False), user_id: str = Depends(get_user_id)):
+    return get_debts(user_id, active_only)
 
 
 @app.post("/api/debts")
-def create_debt_endpoint(debt: DebtCreate):
+def create_debt_endpoint(debt: DebtCreate, user_id: str = Depends(get_user_id)):
     return create_debt(
+        user_id,
         debt.name,
         debt.initial_amount,
         debt.category,
@@ -612,8 +663,9 @@ def create_debt_endpoint(debt: DebtCreate):
 
 
 @app.put("/api/debts/{debt_id}")
-def update_debt_endpoint(debt_id: str, debt: DebtCreate):
+def update_debt_endpoint(debt_id: str, debt: DebtCreate, user_id: str = Depends(get_user_id)):
     updated = update_debt(
+        user_id,
         debt_id,
         debt.name,
         debt.initial_amount,
@@ -629,16 +681,21 @@ def update_debt_endpoint(debt_id: str, debt: DebtCreate):
 
 
 @app.delete("/api/debts/{debt_id}")
-def delete_debt_endpoint(debt_id: str):
-    if not delete_debt(debt_id):
+def delete_debt_endpoint(debt_id: str, user_id: str = Depends(get_user_id)):
+    if not delete_debt(user_id, debt_id):
         raise HTTPException(404, "Debt not found")
 
     return {"message": "deleted"}
 
 
 @app.post("/api/debts/{debt_id}/payments")
-def create_debt_payment_endpoint(debt_id: str, payment: DebtPaymentCreate):
+def create_debt_payment_endpoint(
+    debt_id: str,
+    payment: DebtPaymentCreate,
+    user_id: str = Depends(get_user_id),
+):
     debt = create_debt_payment(
+        user_id,
         debt_id,
         payment.amount,
         payment.payment_date,
@@ -652,12 +709,99 @@ def create_debt_payment_endpoint(debt_id: str, payment: DebtPaymentCreate):
 
 
 @app.delete("/api/debts/{debt_id}/payments/{payment_id}")
-def delete_debt_payment_endpoint(debt_id: str, payment_id: str):
-    if not delete_debt_payment(debt_id, payment_id):
+def delete_debt_payment_endpoint(
+    debt_id: str,
+    payment_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    if not delete_debt_payment(user_id, debt_id, payment_id):
         raise HTTPException(404, "Debt payment not found")
 
-    debt = get_debts()
+    debt = get_debts(user_id)
     return {"message": "deleted", "debts": debt}
+
+
+# ---------------------------
+# INVESTMENTS
+# ---------------------------
+
+@app.get("/api/investments")
+def list_investments(active_only: bool = Query(False), user_id: str = Depends(get_user_id)):
+    return get_investments(user_id, active_only)
+
+
+@app.post("/api/investments")
+def create_investment_endpoint(investment: InvestmentCreate, user_id: str = Depends(get_user_id)):
+    return create_investment(
+        user_id,
+        investment.name,
+        investment.type,
+        investment.start_date,
+        investment.active,
+    )
+
+
+@app.put("/api/investments/{investment_id}")
+def update_investment_endpoint(
+    investment_id: str,
+    investment: InvestmentCreate,
+    user_id: str = Depends(get_user_id),
+):
+    updated = update_investment(
+        user_id,
+        investment_id,
+        investment.name,
+        investment.type,
+        investment.start_date,
+        investment.active,
+    )
+
+    if not updated:
+        raise HTTPException(404, "Investment not found")
+
+    return updated
+
+
+@app.delete("/api/investments/{investment_id}")
+def delete_investment_endpoint(investment_id: str, user_id: str = Depends(get_user_id)):
+    if not delete_investment(user_id, investment_id):
+        raise HTTPException(404, "Investment not found")
+
+    return {"message": "deleted"}
+
+
+@app.post("/api/investments/{investment_id}/values")
+def create_investment_value_endpoint(
+    investment_id: str,
+    value: InvestmentValueCreate,
+    user_id: str = Depends(get_user_id),
+):
+    investment = create_investment_value(
+        user_id,
+        investment_id,
+        value.amount,
+        value.value_date,
+        value.note,
+        value.source,
+    )
+
+    if not investment:
+        raise HTTPException(404, "Investment not found")
+
+    return investment
+
+
+@app.delete("/api/investments/{investment_id}/values/{value_id}")
+def delete_investment_value_endpoint(
+    investment_id: str,
+    value_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    if not delete_investment_value(user_id, investment_id, value_id):
+        raise HTTPException(404, "Investment value not found")
+
+    investments = get_investments(user_id)
+    return {"message": "deleted", "investments": investments}
 
 
 # ---------------------------
@@ -665,13 +809,14 @@ def delete_debt_payment_endpoint(debt_id: str, payment_id: str):
 # ---------------------------
 
 @app.get("/api/allocations")
-def list_allocations():
-    return get_category_allocations()
+def list_allocations(user_id: str = Depends(get_user_id)):
+    return get_category_allocations(user_id)
 
 
 @app.post("/api/allocations")
-def create_allocation(allocation: TransactionAllocationCreate):
+def create_allocation(allocation: TransactionAllocationCreate, user_id: str = Depends(get_user_id)):
     created = create_category_allocation(
+        user_id,
         allocation.from_category,
         allocation.to_category,
         allocation.amount,
@@ -686,15 +831,19 @@ def create_allocation(allocation: TransactionAllocationCreate):
 
 
 @app.delete("/api/allocations/{allocation_id}")
-def delete_allocation(allocation_id: str):
-    if not delete_category_allocation(allocation_id):
+def delete_allocation(allocation_id: str, user_id: str = Depends(get_user_id)):
+    if not delete_category_allocation(user_id, allocation_id):
         raise HTTPException(404, "Allocation not found")
 
     return {"message": "deleted"}
 
 
 @app.get("/api/summary")
-def summary(start_date: str = None, end_date: str = None):
+def summary(
+    start_date: str = None,
+    end_date: str = None,
+    user_id: str = Depends(get_user_id),
+):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -704,11 +853,12 @@ def summary(start_date: str = None, end_date: str = None):
             SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
-        WHERE 1 = 1
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
     """
 
-    params = []
+    params = [user_id]
 
     if start_date:
         query += " AND t.date >= ?"
@@ -725,13 +875,14 @@ def summary(start_date: str = None, end_date: str = None):
 
     conn.close()
 
-    return apply_allocations_to_category_totals(rows, start_date, end_date)
+    return apply_allocations_to_category_totals(user_id, rows, start_date, end_date)
 
 
 @app.get("/api/dashboard")
 def dashboard(
     start_date: str = Query(None),
     end_date: str = Query(None),
+    user_id: str = Depends(get_user_id),
 ):
     conn = get_connection()
     cursor = conn.cursor()
@@ -745,11 +896,12 @@ def dashboard(
             SUM(-t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
-        WHERE 1 = 1
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
     """
 
-    params = []
+    params = [user_id]
 
     if start_date:
         query += " AND t.date >= ?"
@@ -763,6 +915,7 @@ def dashboard(
 
     cursor.execute(query, params)
     summary = apply_allocations_to_category_totals(
+        user_id,
         [dict(r) for r in cursor.fetchall()],
         start_date,
         end_date,
@@ -777,10 +930,11 @@ def dashboard(
             SUM(t.amount) AS total
         FROM transactions t
         LEFT JOIN transaction_classifications c
-            ON c.transaction_id = t.id
-        WHERE 1 = 1
+            ON c.user_id = t.user_id
+            AND c.transaction_id = t.id
+        WHERE t.user_id = ?
     """
-    income_params = []
+    income_params = [user_id]
 
     if start_date:
         income_query += " AND t.date >= ?"
@@ -806,12 +960,12 @@ def dashboard(
     # ---------------------------
     # ENRICHED DATA
     # ---------------------------
-    spending_targets = get_spending_targets_with_progress()
-    saving_goals = get_saving_goals()
-    recurring_rules = get_recurring_rules()
+    spending_targets = get_spending_targets_with_progress(user_id)
+    saving_goals = get_saving_goals(user_id)
+    recurring_rules = get_recurring_rules(user_id)
     recurring_expense_categories = [
         category["category"]
-        for category in get_categories_with_recurring()
+        for category in get_categories_with_recurring(user_id)
         if category.get("is_recurring")
     ]
 

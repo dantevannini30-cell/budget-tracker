@@ -26,7 +26,7 @@ function periodConfig(period) {
   return PERIODS.find((option) => option.value === period) || PERIODS[1];
 }
 
-export default function RecurringCashflowSection() {
+export default function RecurringCashflowSection({ embedded = false }) {
   const [period, setPeriod] = useState("monthly");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -66,20 +66,22 @@ export default function RecurringCashflowSection() {
   }));
 
   return (
-    <div style={{ ...cardStyle, padding: 0 }}>
+    <div style={{ ...(embedded ? {} : cardStyle), padding: 0 }}>
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: embedded ? "flex-end" : "space-between",
           gap: 16,
-          padding: "18px 20px",
-          borderBottom: "1px solid var(--border)",
+          padding: embedded ? "0 0 14px" : "18px 20px",
+          borderBottom: embedded ? "none" : "1px solid var(--border)",
         }}
       >
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 28 }}>
-          Recurring Cashflow
-        </div>
+        {!embedded && (
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 28 }}>
+            Recurring Cashflow
+          </div>
+        )}
 
         <select
           value={period}
@@ -94,7 +96,7 @@ export default function RecurringCashflowSection() {
         </select>
       </div>
 
-      <div style={{ padding: 20, display: "grid", gap: 14 }}>
+      <div style={{ padding: embedded ? 0 : 20, display: "grid", gap: 14 }}>
         <div
           style={{
             height: 280,

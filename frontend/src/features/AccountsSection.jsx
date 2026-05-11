@@ -4,6 +4,8 @@ import { API } from "@/api/constants";
 import SectionShell from "@/components/SectionShell";
 import DebtsSection from "@/features/debts/DebtsSection";
 import useDebts from "@/features/debts/useDebts";
+import InvestmentsSection from "@/features/investments/InvestmentsSection";
+import useInvestments from "@/features/investments/useInvestments";
 
 function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
@@ -134,7 +136,10 @@ function AccountTile({ account, onRename }) {
 export default function AccountsSection() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
+  const [debtCreateRequest, setDebtCreateRequest] = useState(0);
+  const [investmentCreateRequest, setInvestmentCreateRequest] = useState(0);
   const { debts } = useDebts();
+  const { investments } = useInvestments();
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +173,11 @@ export default function AccountsSection() {
   const activeDebts = debts.filter((debt) => debt.active);
   const debtRemaining = debts.reduce(
     (sum, debt) => sum + Number(debt.remaining_amount || 0),
+    0
+  );
+  const activeInvestments = investments.filter((investment) => investment.active);
+  const investmentTotal = activeInvestments.reduce(
+    (sum, investment) => sum + Number(investment.latest_value || 0),
     0
   );
 
@@ -240,32 +250,67 @@ export default function AccountsSection() {
           { label: "Active", value: activeDebts.length },
           { label: "Remaining", value: formatMoney(debtRemaining), tone: debtRemaining > 0 ? "bad" : "good" },
         ]}
+        action={
+          <button
+            type="button"
+            onClick={() => setDebtCreateRequest((value) => value + 1)}
+            style={{
+              background: "var(--accent)",
+              color: "var(--bg)",
+              border: "none",
+              borderRadius: 4,
+              padding: "8px 11px",
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}
+          >
+            Add
+          </button>
+        }
       >
-        <DebtsSection transactions={[]} />
+        <DebtsSection
+          transactions={[]}
+          embedded
+          createRequest={debtCreateRequest}
+        />
       </SectionShell>
 
       <SectionShell
         title="Investments"
-        description="Placeholder for future tracked assets"
+        description="Tracked assets and manual value updates"
         defaultExpanded={false}
         summary={[
-          { label: "Status", value: "Planned" },
-          { label: "Data", value: "Not connected" },
+          { label: "Active", value: activeInvestments.length },
+          { label: "Value", value: formatMoney(investmentTotal), tone: "good" },
         ]}
+        action={
+          <button
+            type="button"
+            onClick={() => setInvestmentCreateRequest((value) => value + 1)}
+            style={{
+              background: "var(--accent)",
+              color: "var(--bg)",
+              border: "none",
+              borderRadius: 4,
+              padding: "8px 11px",
+              cursor: "pointer",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}
+          >
+            Add
+          </button>
+        }
       >
-        <div
-          style={{
-            border: "1px dashed var(--border2)",
-            background: "var(--surface2)",
-            borderRadius: 6,
-            padding: 18,
-            color: "var(--muted2)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-          }}
-        >
-          Investment tracking can use this same compact account pattern once backend data exists.
-        </div>
+        <InvestmentsSection
+          embedded
+          createRequest={investmentCreateRequest}
+        />
       </SectionShell>
     </div>
   );

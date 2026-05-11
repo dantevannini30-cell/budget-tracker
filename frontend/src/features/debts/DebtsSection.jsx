@@ -1,4 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import CategoryDropdown from "@/components/CategoryDropdown";
 import {
@@ -13,6 +22,117 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function formatAxisDate(value) {
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
+}
+
+function buildDebtHistory(debt) {
+  const startDate = debt.start_date?.slice(0, 10) || today();
+  const initialAmount = Number(debt.initial_amount || 0);
+  const payments = [
+    ...(debt.manual_payments || []).map((payment) => ({
+      ...payment,
+      kind: "Manual",
+      payment_date: payment.payment_date?.slice(0, 10) || startDate,
+    })),
+    ...(debt.linked_payments || []).map((payment) => ({
+      ...payment,
+      kind: "Category",
+      payment_date: payment.payment_date?.slice(0, 10) || startDate,
+    })),
+  ].sort((a, b) => new Date(a.payment_date) - new Date(b.payment_date));
+
+  let paid = 0;
+  const points = [
+    {
+      label: startDate,
+      remaining: initialAmount,
+      paid,
+    },
+  ];
+
+  payments.forEach((payment) => {
+    paid += Number(payment.amount || 0);
+    points.push({
+      label: payment.payment_date,
+      remaining: Math.max(initialAmount - paid, 0),
+      paid,
+      kind: payment.kind,
+      note: payment.note || payment.statement || payment.description || payment.category || "Payment",
+    });
+  });
+
+  return points;
+}
+
+function DebtProgressChart({ debt }) {
+  const data = buildDebtHistory(debt);
+
+  return (
+    <div
+      style={{
+        height: 190,
+        border: "1px solid var(--border2)",
+        background: "var(--surface2)",
+        padding: "14px 8px 8px",
+      }}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 4, right: 18, bottom: 0, left: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+          <XAxis
+            dataKey="label"
+            tickFormatter={formatAxisDate}
+            tick={{ fill: "#6b7a96", fontSize: 10, fontFamily: "DM Mono" }}
+            axisLine={false}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tick={{ fill: "#6b7a96", fontSize: 10, fontFamily: "DM Mono" }}
+            axisLine={false}
+            tickLine={false}
+            width={58}
+            tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
+          />
+          <Tooltip
+            formatter={(value, name) => [formatMoney(value), name === "remaining" ? "Remaining" : "Paid"]}
+            labelFormatter={(_, payload) => payload?.[0]?.payload?.label || ""}
+            contentStyle={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 2,
+              color: "var(--text)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="remaining"
+            stroke="var(--red)"
+            strokeWidth={2}
+            dot={{ r: 2, strokeWidth: 1 }}
+            activeDot={{ r: 4 }}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="paid"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            dot={{ r: 2, strokeWidth: 1 }}
+            activeDot={{ r: 4 }}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 function PaymentForm({ debt, onAddPayment, loading }) {
@@ -71,7 +191,11 @@ function PaymentForm({ debt, onAddPayment, loading }) {
   );
 }
 
-export default function DebtsSection({ transactions = [] }) {
+export default function DebtsSection({
+  transactions = [],
+  embedded = false,
+  createRequest = 0,
+}) {
   const {
     debts,
     form,
@@ -88,12 +212,21 @@ export default function DebtsSection({ transactions = [] }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+  const lastCreateRequestRef = useRef(createRequest);
 
   const openCreateModal = () => {
     resetForm();
     setEditingId(null);
     setModalOpen(true);
   };
+
+  useEffect(() => {
+    if (createRequest === lastCreateRequestRef.current) return;
+    lastCreateRequestRef.current = createRequest;
+    resetForm();
+    setEditingId(null);
+    setModalOpen(true);
+  }, [createRequest, resetForm]);
 
   const openEditModal = (debt) => {
     setForm({
@@ -132,25 +265,27 @@ export default function DebtsSection({ transactions = [] }) {
   };
 
   return (
-    <div style={{ ...cardStyle, padding: 0 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-          padding: "18px 20px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 28 }}>
-          Debts
-        </div>
+    <div style={{ ...(embedded ? {} : cardStyle), padding: 0 }}>
+      {!embedded && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "18px 20px",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 28 }}>
+            Debts
+          </div>
 
-        <button type="button" onClick={openCreateModal} style={primaryBtn}>
-          Add
-        </button>
-      </div>
+          <button type="button" onClick={openCreateModal} style={primaryBtn}>
+            Add
+          </button>
+        </div>
+      )}
 
       {modalOpen && (
         <div
@@ -403,43 +538,7 @@ export default function DebtsSection({ transactions = [] }) {
                     gap: 14,
                   }}
                 >
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                      gap: 10,
-                    }}
-                  >
-                    {[
-                      ["Manual", formatMoney(debt.manual_payment_total)],
-                      ["Category", formatMoney(debt.linked_payment_total)],
-                      ["Paid", formatMoney(debt.paid_total)],
-                    ].map(([label, value]) => (
-                      <div
-                        key={label}
-                        style={{
-                          border: "1px solid var(--border2)",
-                          background: "var(--surface2)",
-                          padding: 10,
-                        }}
-                      >
-                        <div
-                          style={{
-                            color: "var(--muted)",
-                            fontFamily: "var(--font-mono)",
-                            fontSize: 9,
-                            textTransform: "uppercase",
-                            marginBottom: 4,
-                          }}
-                        >
-                          {label}
-                        </div>
-                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                          {value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <DebtProgressChart debt={debt} />
 
                   <PaymentForm debt={debt} onAddPayment={handleAddPayment} loading={loading} />
 

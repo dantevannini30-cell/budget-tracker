@@ -1,23 +1,23 @@
 import uuid
-from database import get_connection
+from database import DEFAULT_USER_ID, get_connection
 
 
-def create_spending_target(name, amount, period, categories):
+def create_spending_target(name, amount, period, categories, user_id=DEFAULT_USER_ID):
     conn = get_connection()
     cursor = conn.cursor()
 
     target_id = uuid.uuid4().hex
 
     cursor.execute("""
-        INSERT INTO spending_targets (id, name, amount, period)
-        VALUES (?, ?, ?, ?)
-    """, (target_id, name, amount, period))
+        INSERT INTO spending_targets (id, user_id, name, amount, period)
+        VALUES (?, ?, ?, ?, ?)
+    """, (target_id, user_id, name, amount, period))
 
     for c in categories:
         cursor.execute("""
-            INSERT OR IGNORE INTO spending_target_categories (target_id, category)
-            VALUES (?, ?)
-        """, (target_id, c))
+            INSERT OR IGNORE INTO spending_target_categories (user_id, target_id, category)
+            VALUES (?, ?, ?)
+        """, (user_id, target_id, c))
 
     conn.commit()
     conn.close()
@@ -31,11 +31,11 @@ def create_spending_target(name, amount, period, categories):
     }
 
 
-def get_spending_targets():
+def get_spending_targets(user_id=DEFAULT_USER_ID):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM spending_targets")
+    cursor.execute("SELECT * FROM spending_targets WHERE user_id = ?", (user_id,))
     targets = cursor.fetchall()
 
     result = []
@@ -46,8 +46,9 @@ def get_spending_targets():
         cursor.execute("""
             SELECT category
             FROM spending_target_categories
-            WHERE target_id = ?
-        """, (t["id"],))
+            WHERE user_id = ?
+            AND target_id = ?
+        """, (user_id, t["id"]))
 
         target["categories"] = [r["category"] for r in cursor.fetchall()]
         result.append(target)

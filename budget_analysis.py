@@ -1,19 +1,20 @@
-from database import get_connection
+from database import DEFAULT_USER_ID, get_connection
 
 
-def get_spending_targets_with_progress():
+def get_spending_targets_with_progress(user_id=DEFAULT_USER_ID):
     conn = get_connection()
     cursor = conn.cursor()
 
     # 1. Get all targets
-    cursor.execute("SELECT * FROM spending_targets")
+    cursor.execute("SELECT * FROM spending_targets WHERE user_id = ?", (user_id,))
     targets = [dict(r) for r in cursor.fetchall()]
 
     # 2. Get all categories in ONE query
     cursor.execute("""
         SELECT target_id, category
         FROM spending_target_categories
-    """)
+        WHERE user_id = ?
+    """, (user_id,))
 
     category_map = {}
     for r in cursor.fetchall():
@@ -23,8 +24,9 @@ def get_spending_targets_with_progress():
     cursor.execute("""
         SELECT category, COALESCE(SUM(amount), 0) as spent
         FROM transactions
+        WHERE user_id = ?
         GROUP BY category
-    """)
+    """, (user_id,))
 
     spending_map = {
         r["category"]: r["spent"] for r in cursor.fetchall()
